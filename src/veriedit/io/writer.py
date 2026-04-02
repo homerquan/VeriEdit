@@ -51,6 +51,13 @@ def save_image(array: np.ndarray, path: str | Path) -> Path:
     return output_path
 
 
+def save_mask(mask: np.ndarray, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray((mask.astype("uint8") * 255), mode="L").save(output_path)
+    return output_path
+
+
 def write_json(data: dict, path: str | Path) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import numpy as np
 from PIL import Image
@@ -40,3 +41,17 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
     assert Path(result.report_json).exists()
     assert result.report_md is not None
     assert Path(result.report_md).exists()
+    assert result.summary_md is not None
+    assert Path(result.summary_md).exists()
+    assert result.observation_json is not None
+    assert Path(result.observation_json).exists()
+    assert result.observation_md is not None
+    assert Path(result.observation_md).exists()
+    payload = json.loads(Path(result.report_json).read_text(encoding="utf-8"))
+    assert "diagnostic_artifacts" in payload
+    assert payload["diagnostic_artifacts"].get("regions_board")
+    assert Path(payload["diagnostic_artifacts"]["regions_board"]).exists()
+    assert any("Variant selected:" in note for step in payload["executed_steps"] for note in step["notes"])
+    observation = json.loads(Path(result.observation_json).read_text(encoding="utf-8"))
+    assert any(event["kind"] == "node" for event in observation["trace"])
+    assert any(event["kind"] == "tool" for event in observation["trace"])

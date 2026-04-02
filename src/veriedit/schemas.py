@@ -56,6 +56,8 @@ class StyleProfile(BaseModel):
 class DiagnosticsBundle(BaseModel):
     source: SourceDiagnostics
     reference: StyleProfile | None = None
+    regions: dict[str, Any] = Field(default_factory=dict)
+    artifacts: dict[str, str] = Field(default_factory=dict)
 
 
 class PlanStep(BaseModel):
@@ -89,6 +91,7 @@ class ReviewResult(BaseModel):
     artifact_risk: float = Field(ge=0.0, le=1.0)
     naturalness_score: float = Field(default=0.5, ge=0.0, le=1.0)
     semantic_fabrication_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    patch_metrics: dict[str, float] = Field(default_factory=dict)
     findings: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.75, ge=0.0, le=1.0)
@@ -105,6 +108,9 @@ class FinalResult(BaseModel):
     output_image: str | None = None
     report_json: str | None = None
     report_md: str | None = None
+    summary_md: str | None = None
+    observation_json: str | None = None
+    observation_md: str | None = None
     iterations: int = 0
     applied_tools: list[str] = Field(default_factory=list)
     review_summary: str = ""
@@ -127,6 +133,9 @@ class EditResult(BaseModel):
     output_image: str | None = None
     report_json: str | None = None
     report_md: str | None = None
+    summary_md: str | None = None
+    observation_json: str | None = None
+    observation_md: str | None = None
     iterations: int = 0
     applied_tools: list[str] = Field(default_factory=list)
     review_summary: str = ""
@@ -146,9 +155,11 @@ class WorkflowState(TypedDict):
     current_image_path: str
     policy_status: dict[str, Any]
     diagnostics: dict[str, Any]
+    diagnostic_artifacts: dict[str, str]
     style_profile: dict[str, Any] | None
     plan: dict[str, Any] | None
     executed_steps: list[dict[str, Any]]
+    observation_trace: list[dict[str, Any]]
     intermediate_paths: list[str]
     review: dict[str, Any] | None
     retry_decision: dict[str, Any] | None

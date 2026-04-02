@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from veriedit.io.writer import append_jsonl
+from veriedit.observability import record_node_event
 from veriedit.schemas import AgentLog, PolicyStatus, WorkflowState
 
 REJECT_PATTERNS = [
@@ -31,6 +32,7 @@ CAUTION_PATTERNS = [
 class PolicyAgent:
     def run(self, state: WorkflowState) -> WorkflowState:
         start = time.perf_counter()
+        record_node_event(state, node="policy_check", phase="start", summary={"prompt": state["prompt"][:160]})
         prompt = state["prompt"].lower()
         status = "allow"
         risk_level = "low"
@@ -70,6 +72,7 @@ class PolicyAgent:
                 latency_ms=(time.perf_counter() - start) * 1000,
             ),
         )
+        record_node_event(state, node="policy_check", phase="end", summary={"status": policy.status, "risk_level": policy.risk_level})
         return state
 
     def _log(self, state: WorkflowState, record: AgentLog) -> None:

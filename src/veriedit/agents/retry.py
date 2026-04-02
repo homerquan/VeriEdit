@@ -4,6 +4,7 @@ import time
 
 from veriedit.config import WorkflowConfig
 from veriedit.io.writer import append_jsonl
+from veriedit.observability import record_node_event
 from veriedit.schemas import AgentLog, RetryDecision, WorkflowState
 
 
@@ -13,6 +14,7 @@ class RetryAgent:
 
     def run(self, state: WorkflowState) -> WorkflowState:
         start = time.perf_counter()
+        record_node_event(state, node="decide_retry", phase="start")
         review = state["review"] or {}
         policy = state["policy_status"] or {}
         if policy.get("status") == "reject":
@@ -43,6 +45,7 @@ class RetryAgent:
                 latency_ms=(time.perf_counter() - start) * 1000,
             ),
         )
+        record_node_event(state, node="decide_retry", phase="end", summary={"decision": decision.decision, "reason": decision.reason})
         return state
 
     def _log(self, state: WorkflowState, record: AgentLog) -> None:

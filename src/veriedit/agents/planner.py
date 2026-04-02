@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from veriedit.io.writer import append_jsonl
 from veriedit.llm import GeminiStructuredClient, has_gemini_support
+from veriedit.observability import record_node_event
 from veriedit.schemas import AgentLog, EditPlan, PlanStep, WorkflowState
 from veriedit.tools import build_tool_registry
 
@@ -18,6 +19,7 @@ class PlannerAgent:
 
     def run(self, state: WorkflowState) -> WorkflowState:
         start = time.perf_counter()
+        record_node_event(state, node="plan_edits", phase="start")
         plan = self._plan_with_gemini(state) or self._heuristic_plan(state)
         state["plan"] = plan.model_dump()
         self._log(
@@ -36,6 +38,7 @@ class PlannerAgent:
                 latency_ms=(time.perf_counter() - start) * 1000,
             ),
         )
+        record_node_event(state, node="plan_edits", phase="end", summary={"step_count": len(plan.steps)})
         return state
 
     def _plan_with_gemini(self, state: WorkflowState) -> EditPlan | None:
@@ -67,6 +70,7 @@ class PlannerAgent:
         prompt = state["prompt"].lower()
         retry = state.get("retry_decision") or {}
         blocked_tools = _blocked_tools_from_history(state["executed_steps"])
+        region_summary = state["diagnostics"].get("regions", {})
         steps: list[PlanStep] = []
         acceptance: list[str] = []
         must_avoid = ["oversmoothing", "halo artifacts", "semantic content changes"]
@@ -112,13 +116,18 @@ class PlannerAgent:
                     reason="Reduce small scratch-like artifacts where safe",
                 )
             )
-        if diagnostics["dust_candidates"] > 180 or diagnostics["scratch_candidates"] > 20 or diagnostics["edge_damage_ratio"] > 0.08:
+        if (
+            diagnostics["dust_candidates"] > 180
+            or diagnostics["scratch_candidates"] > 20
+            or diagnostics["edge_damage_ratio"] > 0.08
+            or float(region_summary.get("largest_defect_ratio", 0.0)) < 0.2
+        ):
             if "small_defect_heal" not in blocked_tools:
                 steps.append(
                     PlanStep(
                         tool="small_defect_heal",
                         params={"max_area": 28, "sensitivity": 0.4, "radius": 2.0},
-                        reason="Use local healing for small defects and pits after coarse cleanup",
+                        reason="Use local healing for small detected defect regions after coarse cleanup",
                     )
                 )
         if "noise" in prompt or "grain" in prompt or diagnostics["noise_score"] > 0.08:

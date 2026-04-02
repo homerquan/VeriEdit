@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import numpy as np
 from pydantic import ValidationError
 
 from veriedit.io.loader import load_image
@@ -10,6 +11,7 @@ from veriedit.io.writer import append_jsonl
 from veriedit.llm import GeminiStructuredClient, has_gemini_support
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
 from veriedit.metrics.similarity import compare_images
+from veriedit.observability import record_node_event
 from veriedit.schemas import AgentLog, ReviewResult, WorkflowState
 
 
@@ -19,6 +21,7 @@ class ReviewerAgent:
 
     def run(self, state: WorkflowState) -> WorkflowState:
         start = time.perf_counter()
+        record_node_event(state, node="review_result", phase="start")
         review = self._review_with_gemini(state) or self._heuristic_review(state)
         state["review"] = review.model_dump()
         self._log(
@@ -32,6 +35,12 @@ class ReviewerAgent:
                 output_summary=review.model_dump(),
                 latency_ms=(time.perf_counter() - start) * 1000,
             ),
+        )
+        record_node_event(
+            state,
+            node="review_result",
+            phase="end",
+            summary={"status": review.status, "artifact_risk": review.artifact_risk, "prompt_score": review.prompt_score},
         )
         return state
 
@@ -65,6 +74,7 @@ class ReviewerAgent:
         source_summary = summarize_image_quality(source_image, source_meta)
         current_summary = summarize_image_quality(current_image, current_meta)
         deltas = compare_images(source_image, current_image)
+        patch_metrics = _patch_metrics(source_image, current_image, state["diagnostic_artifacts"])
         reference_alignment = 0.0
         if state["reference_image_path"]:
             reference_image, _ = load_image(state["reference_image_path"])
@@ -73,10 +83,10 @@ class ReviewerAgent:
             style_delta = sum(abs(current_style[key] - reference_style[key]) for key in reference_style) / len(reference_style)
             reference_alignment = max(0.0, 1.0 - style_delta)
         prompt_score = _estimate_prompt_score(state["prompt"], state["diagnostics"]["source"], source_summary, current_summary, reference_alignment)
-        artifact_risk = _estimate_artifact_risk(state["prompt"], state["plan"], source_summary, current_summary, deltas)
+        artifact_risk = _estimate_artifact_risk(state["prompt"], state["plan"], source_summary, current_summary, deltas, patch_metrics)
         semantic_fabrication_risk = _estimate_semantic_fabrication_risk(state["prompt"], state["plan"], deltas)
-        findings = _build_findings(state["prompt"], state["plan"], source_summary, current_summary, deltas)
-        recommendations = _build_recommendations(state["plan"], source_summary, current_summary, artifact_risk)
+        findings = _build_findings(state["prompt"], state["plan"], source_summary, current_summary, deltas, patch_metrics)
+        recommendations = _build_recommendations(state["plan"], source_summary, current_summary, artifact_risk, patch_metrics)
         status = "accept" if prompt_score >= 0.72 and artifact_risk <= 0.35 and semantic_fabrication_risk <= 0.55 else "revise"
         if state["iteration"] >= state["max_iterations"] and status != "accept":
             status = "stop"
@@ -86,6 +96,7 @@ class ReviewerAgent:
             artifact_risk=artifact_risk,
             naturalness_score=max(0.0, 1.0 - artifact_risk),
             semantic_fabrication_risk=semantic_fabrication_risk,
+            patch_metrics=patch_metrics,
             findings=findings,
             recommendations=recommendations,
             confidence=0.7 if state["reference_image_path"] else 0.8,
@@ -135,6 +146,7 @@ def _estimate_artifact_risk(
     source_summary: dict[str, Any],
     current_summary: dict[str, Any],
     deltas: dict[str, float],
+    patch_metrics: dict[str, float],
 ) -> float:
     prompt_lower = prompt.lower()
     plan_tools = [step["tool"] for step in (plan or {}).get("steps", [])]
@@ -153,6 +165,7 @@ def _estimate_artifact_risk(
     risk += max(0.0, deltas["change_area_ratio"] - change_penalty_offset) * change_penalty_scale
     risk += max(0.0, 0.82 - deltas["ssim"]) * 0.6
     risk += max(0.0, current_summary["edge_damage_ratio"] - source_summary["edge_damage_ratio"]) * 1.2
+    risk += max(0.0, patch_metrics.get("preserved_region_change_ratio", 0.0) - 0.22) * 0.9
     return float(min(0.99, risk))
 
 
@@ -173,6 +186,7 @@ def _build_findings(
     source_summary: dict[str, Any],
     current_summary: dict[str, Any],
     deltas: dict[str, float],
+    patch_metrics: dict[str, float],
 ) -> list[str]:
     prompt_lower = prompt.lower()
     plan_tools = [step["tool"] for step in (plan or {}).get("steps", [])]
@@ -190,6 +204,10 @@ def _build_findings(
         findings.append("faded tonal separation improved")
     if current_summary["scratch_candidates"] < source_summary["scratch_candidates"] - 4:
         findings.append("scratch-like defects reduced")
+    if patch_metrics.get("defect_region_improvement", 0.0) > 0.04:
+        findings.append("targeted defect regions improved")
+    if patch_metrics.get("preserved_region_change_ratio", 0.0) > 0.24:
+        findings.append("preserved regions changed more than expected")
     if deltas["change_area_ratio"] > (0.6 if global_tone_edit else 0.45):
         findings.append("edit footprint is broader than ideal")
     if current_summary["clipping_highlights"] > source_summary["clipping_highlights"] + 0.03:
@@ -201,7 +219,13 @@ def _build_findings(
     return findings
 
 
-def _build_recommendations(plan: dict[str, Any] | None, source_summary: dict[str, Any], current_summary: dict[str, Any], artifact_risk: float) -> list[str]:
+def _build_recommendations(
+    plan: dict[str, Any] | None,
+    source_summary: dict[str, Any],
+    current_summary: dict[str, Any],
+    artifact_risk: float,
+    patch_metrics: dict[str, float],
+) -> list[str]:
     recommendations: list[str] = []
     step_tools = [step["tool"] for step in (plan or {}).get("steps", [])]
     if artifact_risk > 0.35 and ("unsharp_mask" in step_tools or "edge_preserving_sharpen" in step_tools):
@@ -212,6 +236,27 @@ def _build_recommendations(plan: dict[str, Any] | None, source_summary: dict[str
         recommendations.append("lower contrast or histogram intensity")
     if current_summary["edge_damage_ratio"] > source_summary["edge_damage_ratio"] + 0.02:
         recommendations.append("prefer local heal over broad tonal edits")
+    if patch_metrics.get("preserved_region_change_ratio", 0.0) > 0.24:
+        recommendations.append("reduce non-local edits outside detected defect regions")
     if not recommendations:
         recommendations.append("no additional changes required")
     return recommendations
+
+
+def _patch_metrics(source_image: np.ndarray, current_image: np.ndarray, artifacts: dict[str, str]) -> dict[str, float]:
+    union_path = artifacts.get("defect_union")
+    if not union_path:
+        return {}
+    try:
+        mask = load_image(union_path)[0][..., 0] > 127
+    except Exception:
+        return {}
+    delta = np.abs(source_image.astype(np.float32) - current_image.astype(np.float32)).mean(axis=2)
+    defect_region_change_ratio = float(np.mean(delta[mask] > 10.0)) if mask.any() else 0.0
+    preserved_mask = ~mask
+    preserved_region_change_ratio = float(np.mean(delta[preserved_mask] > 10.0)) if preserved_mask.any() else 0.0
+    return {
+        "defect_region_change_ratio": defect_region_change_ratio,
+        "preserved_region_change_ratio": preserved_region_change_ratio,
+        "defect_region_improvement": max(0.0, defect_region_change_ratio - preserved_region_change_ratio),
+    }

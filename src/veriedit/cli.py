@@ -11,6 +11,7 @@ from rich.table import Table
 from veriedit import edit_image
 from veriedit.config import WorkflowConfig
 from veriedit.io.loader import load_image
+from veriedit.manual_eval import build_manual_eval_from_run, build_manual_eval_markdown
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
 from veriedit.workflow import VeriEditWorkflow
 
@@ -96,6 +97,44 @@ def report(
 def graph() -> None:
     workflow = VeriEditWorkflow()
     console.print("LangGraph available." if workflow.graph is not None else "LangGraph dependency unavailable; fallback loop is active.")
+
+
+@app.command()
+def manual_eval(
+    output: Path = typer.Option(..., "--output", help="Output markdown path."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Existing workflow run id."),
+    artifact_root: Path = typer.Option(Path("runs"), "--artifact-root", help="Artifact root for --run-id mode."),
+    source: Optional[Path] = typer.Option(None, "--source", exists=True, readable=True, help="Source image path."),
+    reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Reference image path."),
+    result: Optional[Path] = typer.Option(None, "--result", exists=True, readable=True, help="Result image path."),
+    report_json: Optional[Path] = typer.Option(None, "--report-json", exists=True, readable=True, help="Optional report.json path."),
+    observation_json: Optional[Path] = typer.Option(None, "--observation-json", exists=True, readable=True, help="Optional observation trace json path."),
+    prompt: Optional[str] = typer.Option(None, "--prompt", help="Optional prompt override."),
+    title: Optional[str] = typer.Option(None, "--title", help="Optional markdown title."),
+    embed_images: bool = typer.Option(True, "--embed-images/--link-images", help="Embed images as data URIs for portable markdown previews."),
+) -> None:
+    if run_id:
+        markdown_path = build_manual_eval_from_run(
+            run_id,
+            artifact_root=artifact_root,
+            output_path=str(output),
+            embed_images=embed_images,
+        )
+    else:
+        if not source or not result:
+            raise typer.BadParameter("Either --run-id or both --source and --result are required.")
+        markdown_path = build_manual_eval_markdown(
+            source_image=str(source),
+            reference_image=str(reference) if reference else None,
+            result_image=str(result),
+            report_json=str(report_json) if report_json else None,
+            observation_json=str(observation_json) if observation_json else None,
+            prompt=prompt,
+            title=title,
+            output_path=str(output),
+            embed_images=embed_images,
+        )
+    console.print(f"Manual eval markdown: {markdown_path}")
 
 
 if __name__ == "__main__":

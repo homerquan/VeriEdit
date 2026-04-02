@@ -31,7 +31,11 @@ htmlcov/
 
 # Local runtime artifacts
 runs/
+manual_review/
+examples/
+agent_logs.jsonl
 *.log
+*.jsonl
 *.tmp
 *.swp
 

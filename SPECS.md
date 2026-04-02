@@ -578,6 +578,53 @@ Human-readable summary:
 
 ---
 
+## 18.1 Photoshop Gap Roadmap
+
+The project should explicitly acknowledge why a skilled human retoucher can still outperform the autonomous workflow:
+- humans make high-bandwidth local judgments
+- humans branch quickly and keep only the best trial
+- humans work with masks, layers, opacity, and selective brushes
+- humans distinguish real damage from true image structure more reliably
+- humans know when to stop before an edit looks artificial
+
+To close that gap without becoming generative, the roadmap should prioritize:
+
+### Region-aware diagnostics
+- detect and save candidate dust, scratch, border-damage, and low-contrast regions
+- emit machine-readable region summaries
+- persist diagnostic masks as review artifacts
+
+### Region-first planning
+- prefer targeted repairs before broad global edits
+- identify which planned tools are global versus local
+- describe which regions should be protected from each step
+
+### Branch-and-compare execution
+- allow the executor to try a small set of bounded variants for risky steps
+- compare candidates quantitatively before choosing one
+- log rejected candidates for auditability
+
+### Layer-like execution model
+- maintain a reversible sequence of masked edits instead of only flattened image states
+- track per-step masks, opacity, and blend intent where applicable
+
+### Patch-level review
+- review local areas separately from full-frame tonal changes
+- distinguish broad but legitimate restoration from suspicious semantic drift
+- score repairs against the defect maps that motivated them
+
+### Human-in-the-loop mode
+- allow optional approval before committing ambiguous or high-impact steps
+- present comparison boards and mask previews for manual selection
+
+### Incremental delivery guidance
+These features should be implemented one by one, not as a single rewrite. Each completed increment should be tracked in `CHANGE_LOG.md` with:
+- what shipped
+- what remains incomplete
+- why any deferred items were postponed
+
+---
+
 ## 19. MVP Definition
 
 MVP must include:
