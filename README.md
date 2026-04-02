@@ -26,11 +26,19 @@ That opens the interactive shell. For direct one-shot commands, you can still ru
 ```bash
 veriedit edit \
   --input input.jpg \
-  --prompt "Clean dust, reduce yellow cast, and lightly sharpen." \
-  --output result.png
+  --prompt "Clean dust, reduce yellow cast, and lightly sharpen."
 ```
 
-That creates a short run id such as `/tmp/veriedit/ab12cd34/` and stores the final image, reports, step snapshots, and logs together in that folder. If you pass `--output`, VeriEdit uses that as the result filename inside the run folder.
+That creates a short run id such as `/tmp/veriedit/ab12cd34/` and stores the final image, reports, step snapshots, and logs together in that folder.
+
+If you want a different base folder for runs:
+
+```bash
+veriedit edit \
+  --input input.jpg \
+  --prompt "Clean dust, reduce yellow cast, and lightly sharpen." \
+  --output-folder /path/to/my-runs
+```
 
 For manual brush-based touch-up:
 
@@ -67,6 +75,5 @@ result = edit_image(
     source_image="input.jpg",
     prompt="Restore this scan naturally and keep it realistic.",
     reference_image="reference.jpg",
-    output_path="result.png",
 )
 ```

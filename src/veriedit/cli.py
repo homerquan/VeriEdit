@@ -23,6 +23,7 @@ from veriedit.io.loader import load_image
 from veriedit.io.writer import save_image
 from veriedit.manual_eval import build_manual_eval_from_run, build_manual_eval_markdown
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
+from veriedit.schemas import EditRequest
 from veriedit.tools import build_tool_registry
 from veriedit.workflow import VeriEditWorkflow
 
@@ -58,7 +59,7 @@ def edit(
     input: Path = typer.Option(..., "--input", exists=True, readable=True, help="Source image path."),
     prompt: str = typer.Option(..., "--prompt", help="Natural-language editing prompt."),
     reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Optional reference image."),
-    output: Optional[Path] = typer.Option(None, "--output", help="Output image path."),
+    output_folder: Optional[Path] = typer.Option(None, "--output-folder", file_okay=False, help="Folder where run directories should be created."),
     max_iterations: int = typer.Option(3, "--max-iterations", min=1, max=10),
     save_intermediates: bool = typer.Option(True, "--save-intermediates/--no-save-intermediates"),
     enable_human_approval: bool = typer.Option(True, "--human-approval/--no-human-approval"),
@@ -67,7 +68,7 @@ def edit(
         input=input,
         prompt=prompt,
         reference=reference,
-        output=output,
+        output_folder=output_folder,
         max_iterations=max_iterations,
         save_intermediates=save_intermediates,
         enable_human_approval=enable_human_approval,
@@ -287,14 +288,14 @@ def _interactive_edit_wizard() -> None:
     input_path = Path(Prompt.ask("Source image path")).expanduser()
     prompt = Prompt.ask("Editing prompt")
     reference_raw = Prompt.ask("Reference image path (optional)", default="", show_default=False).strip()
-    output_raw = Prompt.ask("Output image path (optional)", default="", show_default=False).strip()
+    output_folder_raw = Prompt.ask("Output folder (optional, default /tmp/veriedit)", default="", show_default=False).strip()
     max_iterations = IntPrompt.ask("Max iterations", default=3)
     enable_human_approval = Confirm.ask("Enable human approval for ambiguous results?", default=True)
     _run_edit_command(
         input=input_path,
         prompt=prompt,
         reference=Path(reference_raw).expanduser() if reference_raw else None,
-        output=Path(output_raw).expanduser() if output_raw else None,
+        output_folder=Path(output_folder_raw).expanduser() if output_folder_raw else None,
         max_iterations=max_iterations,
         save_intermediates=True,
         enable_human_approval=enable_human_approval,
@@ -361,22 +362,25 @@ def _run_edit_command(
     input: Path,
     prompt: str,
     reference: Optional[Path],
-    output: Optional[Path],
+    output_folder: Optional[Path],
     max_iterations: int,
     save_intermediates: bool,
     enable_human_approval: bool,
 ) -> None:
+    workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=output_folder or WorkflowConfig().artifact_root))
     result = _run_with_spinner(
         label=f"Editing {input.name}",
         phases=["policy check", "diagnostics", "planning", "execution", "review", "approval gate", "reporting"],
-        fn=lambda: edit_image(
-            source_image=str(input),
-            prompt=prompt,
-            reference_image=str(reference) if reference else None,
-            output_path=str(output) if output else None,
-            max_iterations=max_iterations,
-            save_intermediates=save_intermediates,
-            enable_human_approval=enable_human_approval,
+        fn=lambda: workflow.run(
+            EditRequest(
+                source_image=str(input),
+                prompt=prompt,
+                reference_image=str(reference) if reference else None,
+                output_path=None,
+                max_iterations=max_iterations,
+                save_intermediates=save_intermediates,
+                enable_human_approval=enable_human_approval,
+            )
         ),
     )
     _print_result_summary(result)
