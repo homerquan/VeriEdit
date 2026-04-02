@@ -1,6 +1,6 @@
-# ToolEdit / VeriEdit
+# VeriEdit
 
-`tooledit` is a non-generative image editing orchestrator that combines classical image processing, a multi-agent review loop, and auditable reporting.
+`veriedit` is a non-generative image editing orchestrator that combines classical image processing, a multi-agent review loop, and auditable reporting.
 
 ## Highlights
 
@@ -14,7 +14,7 @@
 
 ```bash
 pip install -e .
-tooledit edit \
+veriedit edit \
   --input input.jpg \
   --prompt "Clean dust, reduce yellow cast, and lightly sharpen." \
   --output output/result.png
@@ -23,7 +23,7 @@ tooledit edit \
 ## Python API
 
 ```python
-from tooledit import edit_image
+from veriedit import edit_image
 
 result = edit_image(
     source_image="input.jpg",

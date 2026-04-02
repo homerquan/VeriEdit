@@ -1,4 +1,4 @@
-# ToolEdit / VeriEdit
+# VeriEdit
 
 ## 1. Project Summary
 
@@ -151,7 +151,7 @@ The Gemini API supports multimodal input, function calling, structured outputs, 
 ## 6. Package Name Suggestion
 
 Suggested pip package name:
-- `tooledit`
+- `veriedit`
 
 Other options:
 - `veriedit`
@@ -161,10 +161,10 @@ Other options:
 Repo structure:
 
 ```text
-tooledit/
+veriedit/
   pyproject.toml
   README.md
-  src/tooledit/
+  src/veriedit/
     __init__.py
     cli.py
     config.py
@@ -214,7 +214,7 @@ result = edit_image(
 
 #### CLI
 ```bash
-tooledit edit \
+veriedit edit \
   --input old_photo.jpg \
   --prompt "Clean dust, reduce yellow cast, and lightly improve sharpness." \
   --reference desired_mood.jpg \
@@ -464,7 +464,7 @@ A result is accepted only if:
 
 ### Main API
 ```python
-from tooledit import edit_image
+from veriedit import edit_image
 
 result = edit_image(
     source_image="input.jpg",
@@ -476,9 +476,9 @@ result = edit_image(
 
 ### Lower-level API
 ```python
-from tooledit.workflow import ToolEditWorkflow
+from veriedit.workflow import VeriEditWorkflow
 
-wf = ToolEditWorkflow()
+wf = VeriEditWorkflow()
 result = wf.run(request)
 ```
 
@@ -500,15 +500,15 @@ class EditRequest(BaseModel):
 ## 15. CLI Commands
 
 ```bash
-tooledit edit --input IMG --prompt TEXT [--reference IMG] [--output FILE]
-tooledit inspect --input IMG
-tooledit batch --input-dir DIR --prompt TEXT
-tooledit report --run-id RUN_ID
+veriedit edit --input IMG --prompt TEXT [--reference IMG] [--output FILE]
+veriedit inspect --input IMG
+veriedit batch --input-dir DIR --prompt TEXT
+veriedit report --run-id RUN_ID
 ```
 
 ### Example
 ```bash
-tooledit edit \
+veriedit edit \
   --input scan.jpg \
   --reference clean_warm_photo.jpg \
   --prompt "Clean dust, gently restore contrast, and keep the result realistic." \
@@ -601,4 +601,3 @@ The project is successful if it can:
 - explain exactly what it did
 - review its own result and retry when needed
 - avoid fabricating image content
-

@@ -1,4 +1,4 @@
-# ToolEdit / VeriEdit — `agents.md`
+# VeriEdit — `agents.md`
 
 ## 1. Purpose
 
@@ -598,4 +598,3 @@ The strongest product value is:
 - reproducible tool execution
 - closed-loop self-review
 - non-generative trustworthiness
-

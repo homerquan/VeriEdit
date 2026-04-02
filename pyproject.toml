@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tooledit"
+name = "veriedit"
 version = "0.1.0"
 description = "Auditable non-generative image editing orchestration with LangGraph."
 readme = "README.md"
@@ -20,6 +20,7 @@ dependencies = [
   "pillow>=10.4.0",
   "pydantic>=2.9.0",
   "rich>=13.9.0",
+  "scipy>=1.13.0",
   "scikit-image>=0.24.0",
   "typer>=0.12.5",
 ]
@@ -30,10 +31,10 @@ dev = [
 ]
 
 [project.scripts]
-tooledit = "tooledit.cli:app"
+veriedit = "veriedit.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tooledit"]
+packages = ["src/veriedit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from tooledit.config import WorkflowConfig
-from tooledit.schemas import EditRequest
-from tooledit.workflow import ToolEditWorkflow
+from veriedit.config import WorkflowConfig
+from veriedit.schemas import EditRequest
+from veriedit.workflow import VeriEditWorkflow
 
 
 def _save_fixture(path: Path, array: np.ndarray) -> None:
@@ -24,7 +24,7 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
     reference_path = tmp_path / "reference.png"
     _save_fixture(source_path, source)
     _save_fixture(reference_path, reference)
-    workflow = ToolEditWorkflow(config=WorkflowConfig(artifact_root=tmp_path / "runs"))
+    workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=tmp_path / "runs"))
     result = workflow.run(
         EditRequest(
             source_image=str(source_path),

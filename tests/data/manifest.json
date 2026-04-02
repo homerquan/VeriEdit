@@ -1,0 +1,32 @@
+[
+  {
+    "name": "portrait_crop",
+    "source": "tests/data/portrait_crop_source.png",
+    "reference": "tests/data/portrait_crop_reference.png",
+    "prompt": "Clean scan dust and gently align with the softer reference mood."
+  },
+  {
+    "name": "sepia_fade",
+    "source": "tests/data/sepia_fade_source.png",
+    "reference": "tests/data/sepia_fade_reference.png",
+    "prompt": "Restore faded tonal range, reduce dust, and keep the sepia look natural."
+  },
+  {
+    "name": "scratch_heavy",
+    "source": "tests/data/scratch_heavy_source.png",
+    "reference": "tests/data/scratch_heavy_reference.png",
+    "prompt": "Reduce scratches and dust while preserving faces and composition."
+  },
+  {
+    "name": "low_contrast_soft",
+    "source": "tests/data/low_contrast_soft_source.png",
+    "reference": "tests/data/low_contrast_soft_reference.png",
+    "prompt": "Recover contrast gently and keep the image realistic."
+  },
+  {
+    "name": "tight_crop_damage",
+    "source": "tests/data/tight_crop_damage_source.png",
+    "reference": "tests/data/tight_crop_damage_reference.png",
+    "prompt": "Clean localized damage and softly match the reference tone."
+  }
+]

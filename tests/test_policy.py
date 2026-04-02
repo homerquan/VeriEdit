@@ -1,4 +1,4 @@
-from tooledit.policy import PolicyAgent
+from veriedit.policy import PolicyAgent
 
 
 def test_policy_rejects_deceptive_prompt() -> None:
