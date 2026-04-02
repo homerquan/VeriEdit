@@ -5,7 +5,7 @@ from veriedit.tools.color import auto_white_balance, bounded_histogram_match_to_
 from veriedit.tools.denoise import bilateral_denoise, median_cleanup, non_local_means_denoise, wavelet_denoise
 from veriedit.tools.exposure import clahe_contrast, gamma_adjust, histogram_balance, masked_curves_adjustment, shadow_highlight_balance
 from veriedit.tools.geometry import crop, deskew, resize
-from veriedit.tools.paint import paint_strokes
+from veriedit.tools.paint import paint_strokes, stroke_paint
 from veriedit.tools.retouch import (
     clone_source_paint,
     dust_cleanup,
@@ -330,6 +330,26 @@ def build_tool_registry() -> ToolRegistry:
             likely_failure_modes=["Poor stroke placement can cover genuine image detail.", "Overly opaque strokes may look artificial."],
             reversibility_notes="Re-run from the original or prior intermediate with adjusted strokes or opacity.",
             operation=paint_strokes,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="stroke_paint",
+            description="Plan and render explicit repair strokes inside selected regions using the closed-loop stroke engine.",
+            input_schema={"mask_boxes": "list[box]", "stroke_budget": "int", "candidate_count": "int", "pen": "str", "prompt": "str"},
+            safety_notes=["Restricted to explicit ROI masks or points.", "Uses rendered strokes and canvas feedback, not generative diffusion."],
+            parameter_bounds={
+                "stroke_budget": (1, 128),
+                "candidate_count": (4, 64),
+                "min_size": (1, 64),
+                "max_size": (1, 128),
+                "opacity": (0.05, 1.0),
+                "pen": ["soft", "round", "square"],
+            },
+            expected_effect="Repairs a damaged region by using the closed-loop stroke engine to place short corrective stroke commits against a local target.",
+            likely_failure_modes=["Can look painterly if the ROI is too large.", "Without a good mask, strokes may overpaint authentic detail."],
+            reversibility_notes="Reduce stroke budget, shrink the ROI, or rerun from the original image.",
+            operation=stroke_paint,
         )
     )
     return registry

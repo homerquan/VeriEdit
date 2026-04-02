@@ -34,7 +34,7 @@ class ExecutorAgent:
             spec = self.registry.get(raw_step["tool"])
             params = sanitize_numeric_params(raw_step.get("params", {}), spec.parameter_bounds)
             before_metrics = summarize_image_quality(current_image, metadata)
-            execution_context = _execution_context(raw_step["tool"], mask_cache)
+            execution_context = _execution_context(raw_step["tool"], params, mask_cache, current_image.shape[:2])
             candidate, operation_notes, after_metrics, comparison, variant_label = _choose_candidate(
                 spec,
                 current_image,
@@ -156,6 +156,7 @@ def _choose_candidate(spec, current_image, params, reference_image, execution_co
         "bilateral_denoise",
         "small_defect_heal",
         "unsharp_mask",
+        "stroke_paint",
     }:
         variants.append(("softened", softened))
 
@@ -216,6 +217,9 @@ def _candidate_score(tool_name: str, metrics: dict, comparison: dict[str, float]
     elif tool_name in {"dust_cleanup", "scratch_candidate_cleanup", "small_defect_heal"}:
         score += metrics["dust_candidates"] / 3000.0
         score += metrics["scratch_candidates"] / 1500.0
+    elif tool_name == "stroke_paint":
+        score += comparison.get("preserved_region_change_ratio", 0.0) * 5.0
+        score -= comparison.get("target_region_change_ratio", 0.0) * 0.9
     return score
 
 
@@ -250,7 +254,23 @@ def _load_execution_masks(state: WorkflowState) -> dict[str, np.ndarray]:
     return masks
 
 
-def _execution_context(tool_name: str, mask_cache: dict[str, np.ndarray]) -> dict[str, object]:
+def _execution_context(
+    tool_name: str,
+    params: dict[str, object],
+    mask_cache: dict[str, np.ndarray],
+    image_shape: tuple[int, int],
+) -> dict[str, object]:
+    if tool_name == "stroke_paint":
+        boxes = params.get("mask_boxes", [])
+        mask = _mask_from_boxes(image_shape, boxes)
+        if mask.any():
+            return {
+                "mode": "masked_local_repair",
+                "mask_name": "stroke_roi",
+                "mask": mask,
+                "mask_coverage": float(np.mean(mask)),
+            }
+        return {"mode": "global", "mask_name": None, "mask": None, "mask_coverage": 0.0}
     local_mask_name = {
         "dust_cleanup": "dust_mask",
         "scratch_candidate_cleanup": "scratch_mask",
@@ -267,6 +287,27 @@ def _execution_context(tool_name: str, mask_cache: dict[str, np.ndarray]) -> dic
         "mask": mask,
         "mask_coverage": float(np.mean(mask)),
     }
+
+
+def _mask_from_boxes(shape: tuple[int, int], boxes: object) -> np.ndarray:
+    mask = np.zeros(shape, dtype=bool)
+    if not isinstance(boxes, list):
+        return mask
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+        x = int(box.get("x", 0))
+        y = int(box.get("y", 0))
+        width = int(box.get("width", 0))
+        height = int(box.get("height", 0))
+        if width <= 0 or height <= 0:
+            continue
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(shape[1], x + width)
+        y1 = min(shape[0], y + height)
+        mask[y0:y1, x0:x1] = True
+    return mask
 
 
 def _apply_execution_context(current_image: np.ndarray, candidate: np.ndarray, execution_context: dict[str, object]) -> np.ndarray:

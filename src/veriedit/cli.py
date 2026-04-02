@@ -79,9 +79,12 @@ def edit(
 def paint(
     input: Path = typer.Option(..., "--input", exists=True, readable=True, help="Source image path."),
     output: Path = typer.Option(..., "--output", help="Painted output path."),
-    tool: str = typer.Option("paint", "--tool", help="Tool mode: paint, spot-heal, heal, or clone."),
+    tool: str = typer.Option("paint", "--tool", help="Tool mode: paint, spot-heal, heal, clone, or stroke."),
+    prompt: str = typer.Option("", "--prompt", help="Optional instruction to record or guide stroke-engine emphasis."),
+    reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Optional reference/target image for stroke paint."),
     stroke: list[str] = typer.Option([], "--stroke", help="Stroke polyline as \"x1,y1 x2,y2 ...\". Repeat for multiple strokes."),
     strokes_file: Optional[Path] = typer.Option(None, "--strokes-file", exists=True, readable=True, help="Optional JSON file with stroke objects."),
+    mask_box: list[str] = typer.Option([], "--mask-box", help="ROI box for stroke paint as x,y,width,height. Repeat for multiple boxes."),
     color: Optional[str] = typer.Option(None, "--color", help="Brush color as #RRGGBB or r,g,b. If omitted, sample from the first stroke point."),
     sample_color: Optional[str] = typer.Option(None, "--sample-color", help="Sample brush color from x,y in the source image."),
     source_point: Optional[str] = typer.Option(None, "--source-point", help="Healing/clone source point as x,y."),
@@ -91,6 +94,9 @@ def paint(
     opacity: float = typer.Option(0.65, "--opacity", min=0.0, max=1.0, help="Brush opacity."),
     feather: float = typer.Option(4.0, "--feather", min=0.0, help="Feather radius for healing/clone."),
     rotation: float = typer.Option(0.0, "--rotation", help="Clone/heal source rotation in degrees."),
+    stroke_budget: int = typer.Option(12, "--stroke-budget", min=1, max=128, help="Stroke budget for --tool stroke."),
+    candidate_count: int = typer.Option(18, "--candidate-count", min=4, max=64, help="Candidate strokes evaluated per iteration for --tool stroke."),
+    engine_debug_dir: Optional[Path] = typer.Option(None, "--engine-debug-dir", file_okay=False, help="Optional directory for stroke-engine debug artifacts."),
     flip_horizontal: bool = typer.Option(False, "--flip-horizontal/--no-flip-horizontal"),
     flip_vertical: bool = typer.Option(False, "--flip-vertical/--no-flip-vertical"),
 ) -> None:
@@ -98,8 +104,11 @@ def paint(
         input=input,
         output=output,
         tool=tool,
+        prompt=prompt,
+        reference=reference,
         stroke=stroke,
         strokes_file=strokes_file,
+        mask_box=mask_box,
         color=color,
         sample_color=sample_color,
         source_point=source_point,
@@ -109,6 +118,9 @@ def paint(
         opacity=opacity,
         feather=feather,
         rotation=rotation,
+        stroke_budget=stroke_budget,
+        candidate_count=candidate_count,
+        engine_debug_dir=engine_debug_dir,
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
     )
@@ -275,6 +287,7 @@ def _print_shell_help() -> None:
     table.add_row("edit", "Guided image-edit workflow with policy, review, and reports.")
     table.add_row("paint", "Guided brush tool for localized touch-up with soft/round/square pens.")
     table.add_row("paint --tool heal", "Use Photoshop-style healing or clone tools from explicit coordinates.")
+    table.add_row("paint --tool stroke", "Use iterative planned strokes inside a selected ROI.")
     table.add_row("inspect --input <path>", "Show diagnostic metrics for one image.")
     table.add_row("report --run-id <id>", "Print a run report as JSON.")
     table.add_row("manual-eval ...", "Generate a self-contained markdown review sheet.")
@@ -305,7 +318,7 @@ def _interactive_edit_wizard() -> None:
 def _interactive_paint_wizard() -> None:
     input_path = Path(Prompt.ask("Source image path")).expanduser()
     output_path = Path(Prompt.ask("Output image path")).expanduser()
-    tool = Prompt.ask("Tool", choices=["paint", "spot-heal", "heal", "clone"], default="paint")
+    tool = Prompt.ask("Tool", choices=["paint", "spot-heal", "heal", "clone", "stroke"], default="paint")
     pen = Prompt.ask("Pen type", choices=["soft", "round", "square"], default="soft") if tool == "paint" else "soft"
     size = IntPrompt.ask("Brush size", default=8)
     opacity = FloatPrompt.ask("Opacity", default=0.65)
@@ -318,6 +331,8 @@ def _interactive_paint_wizard() -> None:
     blend_mode = "normal"
     feather = 4.0
     rotation = 0.0
+    stroke_budget = 12
+    candidate_count = 18
     flip_horizontal = False
     flip_vertical = False
     if tool in {"heal", "clone"}:
@@ -327,6 +342,16 @@ def _interactive_paint_wizard() -> None:
         rotation = FloatPrompt.ask("Rotation", default=0.0)
         flip_horizontal = Confirm.ask("Flip source horizontally?", default=False)
         flip_vertical = Confirm.ask("Flip source vertically?", default=False)
+    mask_boxes: list[str] = []
+    if tool == "stroke":
+        stroke_budget = IntPrompt.ask("Stroke budget", default=12)
+        candidate_count = IntPrompt.ask("Candidate count", default=18)
+        console.print("[dim]Enter mask boxes as `x,y,width,height`. Press Enter on a blank line when finished.[/dim]")
+        while True:
+            box_line = Prompt.ask("Mask box", default="", show_default=False).strip()
+            if not box_line:
+                break
+            mask_boxes.append(box_line)
     stroke_specs: list[str] = []
     console.print("[dim]Enter stroke points as `x1,y1 x2,y2 ...`. Press Enter on a blank line when finished.[/dim]")
     while True:
@@ -334,15 +359,18 @@ def _interactive_paint_wizard() -> None:
         if not stroke_line:
             break
         stroke_specs.append(stroke_line)
-    if not stroke_specs:
+    if tool != "stroke" and not stroke_specs:
         console.print("[yellow]No strokes entered, nothing to paint.[/yellow]")
         return
     _run_paint_command(
         input=input_path,
         output=output_path,
         tool=tool,
+        prompt="",
+        reference=None,
         stroke=stroke_specs,
         strokes_file=None,
+        mask_box=mask_boxes,
         color=color or None,
         sample_color=None,
         source_point=source_point or None,
@@ -352,6 +380,9 @@ def _interactive_paint_wizard() -> None:
         opacity=opacity,
         feather=feather,
         rotation=rotation,
+        stroke_budget=stroke_budget,
+        candidate_count=candidate_count,
+        engine_debug_dir=None,
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
     )
@@ -391,8 +422,11 @@ def _run_paint_command(
     input: Path,
     output: Path,
     tool: str,
+    prompt: str,
+    reference: Optional[Path],
     stroke: list[str],
     strokes_file: Optional[Path],
+    mask_box: list[str],
     color: Optional[str],
     sample_color: Optional[str],
     source_point: Optional[str],
@@ -402,18 +436,25 @@ def _run_paint_command(
     opacity: float,
     feather: float,
     rotation: float,
+    stroke_budget: int,
+    candidate_count: int,
+    engine_debug_dir: Optional[Path],
     flip_horizontal: bool,
     flip_vertical: bool,
 ) -> None:
     image, _ = load_image(input)
+    reference_image = None
+    if reference is not None:
+        reference_image, _ = load_image(reference)
     strokes = _load_strokes(stroke, strokes_file)
-    if not strokes:
-        raise typer.BadParameter("Provide at least one --stroke or a --strokes-file with stroke objects.")
     registry = build_tool_registry()
     tool_name = _resolve_paint_tool_name(tool)
+    if tool_name != "stroke_paint" and not strokes:
+        raise typer.BadParameter("Provide at least one --stroke or a --strokes-file with stroke objects.")
     payload, resolved_color = _build_paint_payload(
         image=image,
         strokes=strokes,
+        mask_boxes=mask_box,
         tool_name=tool_name,
         color=color,
         sample_color=sample_color,
@@ -424,12 +465,16 @@ def _run_paint_command(
         opacity=opacity,
         feather=feather,
         rotation=rotation,
+        stroke_budget=stroke_budget,
+        candidate_count=candidate_count,
+        prompt=prompt,
+        engine_debug_dir=engine_debug_dir,
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
     )
 
     def _apply() -> tuple[Any, dict[str, Any]]:
-        return registry.get(tool_name).operation(image, payload, None)
+        return registry.get(tool_name).operation(image, payload, reference_image)
 
     painted, details = _run_with_spinner(
         label=f"Painting {input.name}",
@@ -443,9 +488,16 @@ def _run_paint_command(
     table.add_row("Tool", tool_name)
     table.add_row("Output", str(output))
     table.add_row("Stroke count", str(details.get("stroke_count", details.get("point_count", details.get("target_count", 0)))))
+    if prompt:
+        table.add_row("Prompt", prompt)
     if tool_name == "paint_strokes":
         table.add_row("Pen types", ", ".join(details.get("pen_types", [])) or pen)
         table.add_row("Brush color", str(tuple(resolved_color)))
+    if tool_name == "stroke_paint":
+        table.add_row("Backend", str(details.get("backend", "stroke_paint")))
+        table.add_row("Target source", str(details.get("target_source")))
+        if details.get("debug_dir"):
+            table.add_row("Engine debug", str(details.get("debug_dir")))
     if tool_name in {"healing_brush", "clone_source_paint"}:
         table.add_row("Blend mode", str(details.get("mode")))
         table.add_row("Source rotation", str(details.get("rotation")))
@@ -530,9 +582,12 @@ def _resolve_paint_tool_name(tool: str) -> str:
         "spot_heal": "spot_healing_brush",
         "heal": "healing_brush",
         "clone": "clone_source_paint",
+        "stroke": "stroke_paint",
+        "stroke-engine": "stroke_paint",
+        "stroke_engine": "stroke_paint",
     }
     if normalized not in mapping:
-        raise typer.BadParameter("--tool must be one of: paint, spot-heal, heal, clone.")
+        raise typer.BadParameter("--tool must be one of: paint, spot-heal, heal, clone, stroke, stroke-engine.")
     return mapping[normalized]
 
 
@@ -540,6 +595,7 @@ def _build_paint_payload(
     *,
     image: Any,
     strokes: list[dict[str, Any]],
+    mask_boxes: list[str],
     tool_name: str,
     color: Optional[str],
     sample_color: Optional[str],
@@ -550,6 +606,10 @@ def _build_paint_payload(
     opacity: float,
     feather: float,
     rotation: float,
+    stroke_budget: int,
+    candidate_count: int,
+    prompt: str,
+    engine_debug_dir: Optional[Path],
     flip_horizontal: bool,
     flip_vertical: bool,
 ) -> tuple[dict[str, Any], tuple[int, int, int]]:
@@ -564,6 +624,23 @@ def _build_paint_payload(
     points = [stroke["points"][0] for stroke in strokes if stroke.get("points")]
     if tool_name == "spot_healing_brush":
         return {"points": points, "radius": size}, resolved_color
+    if tool_name == "stroke_paint":
+        return (
+            {
+                "mask_boxes": [_parse_mask_box(box) for box in mask_boxes],
+                "points": points,
+                "radius": size,
+                "stroke_budget": stroke_budget,
+                "candidate_count": candidate_count,
+                "min_size": max(1, size // 3),
+                "max_size": max(size, int(size * 1.5)),
+                "opacity": opacity,
+                "pen": pen,
+                "prompt": prompt,
+                "debug_dir": str(engine_debug_dir) if engine_debug_dir else None,
+            },
+            resolved_color,
+        )
     if not source_point:
         raise typer.BadParameter("--source-point is required for heal and clone tools.")
     return (
@@ -605,8 +682,12 @@ def _resolve_brush_color(
         return _sample_rgb(image, x, y)
     if color:
         return _parse_color(color)
-    first_point = strokes[0]["points"][0]
-    return _sample_rgb(image, int(first_point[0]), int(first_point[1]))
+    if strokes:
+        first_point = strokes[0]["points"][0]
+        return _sample_rgb(image, int(first_point[0]), int(first_point[1]))
+    center_y = image.shape[0] // 2
+    center_x = image.shape[1] // 2
+    return _sample_rgb(image, center_x, center_y)
 
 
 def _parse_color(value: str) -> tuple[int, int, int]:
@@ -624,6 +705,14 @@ def _parse_xy(value: str) -> tuple[int, int]:
     if len(parts) != 2:
         raise typer.BadParameter("Expected coordinates as x,y.")
     return int(parts[0]), int(parts[1])
+
+
+def _parse_mask_box(value: str) -> dict[str, int]:
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 4:
+        raise typer.BadParameter("Expected mask box as x,y,width,height.")
+    x, y, width, height = (int(part) for part in parts)
+    return {"x": x, "y": y, "width": width, "height": height}
 
 
 def _sample_rgb(image: Any, x: int, y: int) -> tuple[int, int, int]:

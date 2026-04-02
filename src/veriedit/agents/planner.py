@@ -130,6 +130,25 @@ class PlannerAgent:
                         reason="Use local healing for small detected defect regions after coarse cleanup",
                     )
                 )
+        if _should_use_stroke_paint(prompt, diagnostics, region_summary, blocked_tools):
+            boxes = _stroke_paint_boxes(region_summary)
+            if boxes:
+                steps.append(
+                    PlanStep(
+                        tool="stroke_paint",
+                        params={
+                            "mask_boxes": boxes,
+                            "stroke_budget": 10 if "natural" in prompt else 14,
+                            "candidate_count": 14,
+                            "min_size": 3,
+                            "max_size": 10,
+                            "opacity": 0.5 if "natural" in prompt else 0.62,
+                            "pen": "soft",
+                        },
+                        reason="Use iterative local repair strokes on the most concentrated damaged regions",
+                    )
+                )
+                acceptance.append("localized damaged regions repaired without broad overpaint")
         if "noise" in prompt or "grain" in prompt or diagnostics["noise_score"] > 0.08:
             if "non_local_means_denoise" in blocked_tools and "bilateral_denoise" not in blocked_tools:
                 steps.append(
@@ -222,3 +241,38 @@ def _blocked_tools_from_history(executed_steps: list[dict[str, Any]]) -> set[str
         if statuses and all(status == "rolled_back" for status in statuses):
             blocked.add(tool)
     return blocked
+
+
+def _should_use_stroke_paint(
+    prompt: str,
+    diagnostics: dict[str, Any],
+    region_summary: dict[str, Any],
+    blocked_tools: set[str],
+) -> bool:
+    if "stroke_paint" in blocked_tools:
+        return False
+    prompt_requests_local_repair = any(
+        word in prompt for word in ("repair", "retouch", "paint", "patch", "restore damaged", "fix damaged")
+    )
+    concentrated_damage = (
+        diagnostics["scratch_candidates"] > 24
+        or diagnostics["dust_candidates"] > 260
+        or float(region_summary.get("largest_defect_ratio", 0.0)) > 0.0008
+    )
+    return prompt_requests_local_repair or concentrated_damage
+
+
+def _stroke_paint_boxes(region_summary: dict[str, Any]) -> list[dict[str, int]]:
+    boxes: list[dict[str, int]] = []
+    for region in region_summary.get("top_regions", [])[:3]:
+        width = int(region.get("width", 0))
+        height = int(region.get("height", 0))
+        x = int(region.get("x", 0))
+        y = int(region.get("y", 0))
+        if width <= 0 or height <= 0:
+            continue
+        if width * height > 16000:
+            continue
+        pad = max(4, int(max(width, height) * 0.25))
+        boxes.append({"x": max(0, x - pad), "y": max(0, y - pad), "width": width + pad * 2, "height": height + pad * 2})
+    return boxes

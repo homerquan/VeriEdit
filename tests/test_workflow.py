@@ -72,3 +72,28 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
     observation = json.loads(Path(result.observation_json).read_text(encoding="utf-8"))
     assert any(event["kind"] == "node" for event in observation["trace"])
     assert any(event["kind"] == "tool" for event in observation["trace"])
+
+
+def test_workflow_can_plan_and_execute_stroke_paint(tmp_path: Path) -> None:
+    source = np.full((96, 96, 3), 140, dtype=np.uint8)
+    source[30:38, 28:70] = 245
+    source[40:45, 40:48] = 20
+    source_path = tmp_path / "source.png"
+    _save_fixture(source_path, source)
+    workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=tmp_path / "runs"))
+    result = workflow.run(
+        EditRequest(
+            source_image=str(source_path),
+            prompt="Repair the damaged region naturally with local retouching.",
+            max_iterations=1,
+            save_intermediates=True,
+            enable_human_approval=False,
+        )
+    )
+    assert result.report_json is not None
+    payload = json.loads(Path(result.report_json).read_text(encoding="utf-8"))
+    tools = [step["tool"] for step in payload["executed_steps"]]
+    assert "stroke_paint" in tools
+    stroke_step = next(step for step in payload["executed_steps"] if step["tool"] == "stroke_paint")
+    assert stroke_step["execution_mode"] == "masked_local_repair"
+    assert stroke_step["mask_name"] == "stroke_roi"

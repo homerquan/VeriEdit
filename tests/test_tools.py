@@ -12,6 +12,7 @@ def test_registry_contains_expected_tools() -> None:
     assert "healing_brush" in registry.names()
     assert "clone_source_paint" in registry.names()
     assert "masked_curves_adjustment" in registry.names()
+    assert "stroke_paint" in registry.names()
 
 
 def test_white_balance_changes_blue_channel_bias() -> None:
@@ -55,6 +56,40 @@ def test_paint_strokes_draws_visible_soft_brush_mark() -> None:
     assert details["stroke_count"] == 1
     assert not np.array_equal(output, image)
     assert output[20, 20, 0] > image[20, 20, 0]
+
+
+def test_paint_strokes_supports_curve_and_dot_primitives() -> None:
+    registry = build_tool_registry()
+    image = np.full((48, 48, 3), 110, dtype=np.uint8)
+    output, details = registry.get("paint_strokes").operation(
+        image,
+        {
+            "strokes": [
+                {
+                    "points": [[6, 30], [20, 10], [34, 28]],
+                    "color": [180, 70, 60],
+                    "primitive": "curve",
+                    "pen": "soft",
+                    "size": 5,
+                    "opacity": 0.75,
+                },
+                {
+                    "points": [[38, 38]],
+                    "color": [60, 180, 90],
+                    "primitive": "dot",
+                    "pen": "round",
+                    "size": 6,
+                    "opacity": 0.9,
+                },
+            ]
+        },
+        None,
+    )
+    assert details["applied"] is True
+    assert "curve" in details["primitives"]
+    assert "dot" in details["primitives"]
+    assert not np.array_equal(output, image)
+    assert output[38, 38, 1] > image[38, 38, 1]
 
 
 def test_spot_healing_brush_repairs_marked_spot() -> None:
@@ -130,3 +165,29 @@ def test_masked_curves_adjustment_changes_only_masked_area() -> None:
     assert details["mask_pixels"] > 0
     assert output[:, 6, 0].mean() > image[:, 6, 0].mean()
     assert abs(float(output[:, 42, 0].mean()) - float(image[:, 42, 0].mean())) < 5.0
+
+
+def test_stroke_paint_improves_masked_damage_region() -> None:
+    registry = build_tool_registry()
+    image = np.full((64, 64, 3), 135, dtype=np.uint8)
+    image[20:32, 24:40] = [240, 240, 240]
+    output, details = registry.get("stroke_paint").operation(
+        image,
+        {
+            "mask_boxes": [{"x": 22, "y": 18, "width": 22, "height": 18}],
+            "stroke_budget": 10,
+            "candidate_count": 12,
+            "min_size": 3,
+            "max_size": 10,
+            "opacity": 0.7,
+            "pen": "soft",
+        },
+        None,
+    )
+    assert details["applied"] is True
+    assert details["stroke_count"] > 0
+    assert details["mse_after"] < details["mse_before"]
+    assert any(stroke["primitive"] in {"curve", "line", "dot"} for stroke in details["strokes"])
+    repaired_mean = float(output[22:30, 26:38, 0].mean())
+    original_mean = float(image[22:30, 26:38, 0].mean())
+    assert repaired_mean < original_mean

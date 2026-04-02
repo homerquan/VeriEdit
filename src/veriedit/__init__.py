@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from veriedit.engine import ClosedLoopStrokeEngine, EngineConfig, EngineResult
 from veriedit.schemas import EditRequest, EditResult
 from veriedit.workflow import VeriEditWorkflow
 
@@ -28,4 +29,12 @@ def edit_image(
     )
     return VeriEditWorkflow().run(request)
 
-__all__ = ["EditRequest", "EditResult", "VeriEditWorkflow", "edit_image"]
+__all__ = [
+    "ClosedLoopStrokeEngine",
+    "EditRequest",
+    "EditResult",
+    "EngineConfig",
+    "EngineResult",
+    "VeriEditWorkflow",
+    "edit_image",
+]
