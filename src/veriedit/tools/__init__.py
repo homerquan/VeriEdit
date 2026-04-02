@@ -3,9 +3,17 @@ from __future__ import annotations
 from veriedit.tools.base import ToolRegistry, ToolSpec
 from veriedit.tools.color import auto_white_balance, bounded_histogram_match_to_reference
 from veriedit.tools.denoise import bilateral_denoise, median_cleanup, non_local_means_denoise, wavelet_denoise
-from veriedit.tools.exposure import clahe_contrast, gamma_adjust, histogram_balance, shadow_highlight_balance
+from veriedit.tools.exposure import clahe_contrast, gamma_adjust, histogram_balance, masked_curves_adjustment, shadow_highlight_balance
 from veriedit.tools.geometry import crop, deskew, resize
-from veriedit.tools.retouch import dust_cleanup, scratch_candidate_cleanup, small_defect_heal
+from veriedit.tools.paint import paint_strokes
+from veriedit.tools.retouch import (
+    clone_source_paint,
+    dust_cleanup,
+    healing_brush,
+    scratch_candidate_cleanup,
+    small_defect_heal,
+    spot_healing_brush,
+)
 from veriedit.tools.sharpen import edge_preserving_sharpen, unsharp_mask
 from veriedit.tools.texture import texture_softness_bias_from_reference
 
@@ -75,6 +83,19 @@ def build_tool_registry() -> ToolRegistry:
             likely_failure_modes=["Can flatten contrast if pushed too hard."],
             reversibility_notes="Retry with smaller lift/compression values.",
             operation=shadow_highlight_balance,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="masked_curves_adjustment",
+            description="Apply a curves-style tonal adjustment inside masked regions with soft transitions.",
+            input_schema={"curve_points": "list[[int,int]]", "mask_boxes": "list[box]", "feather_sigma": "float"},
+            safety_notes=["Only affects tone; no semantic synthesis.", "Use masks to keep edits local and reversible."],
+            parameter_bounds={"feather_sigma": (0.0, 40.0), "opacity": (0.0, 1.0), "motion_blur_length": (0, 101)},
+            expected_effect="Locally brightens or darkens regions with feathered edges, similar to a masked adjustment layer.",
+            likely_failure_modes=["Hard masks can create visible transitions if feathering is too low.", "Aggressive curves can clip highlights or shadows."],
+            reversibility_notes="Adjust mask boxes, curve points, or opacity and rerun from the original.",
+            operation=masked_curves_adjustment,
         )
     )
     registry.register(
@@ -170,6 +191,45 @@ def build_tool_registry() -> ToolRegistry:
     )
     registry.register(
         ToolSpec(
+            name="spot_healing_brush",
+            description="Heal explicit small spot locations using nearby pixels, similar to Photoshop's Spot Healing Brush.",
+            input_schema={"points": "list[[int,int]]", "radius": "int"},
+            safety_notes=["Restricted to explicitly marked spots.", "Uses only neighboring image pixels."],
+            parameter_bounds={"radius": (1, 128)},
+            expected_effect="Repairs isolated specks and small blemishes quickly.",
+            likely_failure_modes=["Large radii can blur nearby edges.", "Dense spot clusters may need more targeted healing."],
+            reversibility_notes="Rerun with smaller radii or fewer points.",
+            operation=spot_healing_brush,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="healing_brush",
+            description="Copy texture from a chosen source point to explicit target points while preserving local tone.",
+            input_schema={"source_point": "[int,int]", "target_points": "list[[int,int]]", "radius": "int", "mode": "str"},
+            safety_notes=["Requires explicit source and target coordinates.", "Uses only nearby copied pixels from the same image."],
+            parameter_bounds={"radius": (1, 160), "opacity": (0.0, 1.0), "feather": (0.0, 80.0), "mode": ["normal", "replace"]},
+            expected_effect="Repairs more complex damage by transplanting detail from another region, with optional tone matching.",
+            likely_failure_modes=["Bad source choice can duplicate unwanted texture.", "Replace mode can look abrupt if feathering is too low."],
+            reversibility_notes="Choose a new source point, reduce opacity, or switch modes and rerun.",
+            operation=healing_brush,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="clone_source_paint",
+            description="Copy a transformed source patch onto target points with optional rotation and flipping.",
+            input_schema={"source_point": "[int,int]", "target_points": "list[[int,int]]", "rotation": "float", "flip_horizontal": "bool"},
+            safety_notes=["Requires explicit source and target coordinates.", "No generated content; only transformed source pixels."],
+            parameter_bounds={"radius": (1, 160), "opacity": (0.0, 1.0), "feather": (0.0, 80.0)},
+            expected_effect="Replaces damaged areas with a mirrored or rotated copy from another image region.",
+            likely_failure_modes=["Visible duplication if the transform does not match anatomy or texture flow."],
+            reversibility_notes="Change rotation/flip/source and rerun from the original.",
+            operation=clone_source_paint,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="unsharp_mask",
             description="Conservative unsharp mask sharpening.",
             input_schema={"radius": "float", "amount": "float"},
@@ -257,6 +317,19 @@ def build_tool_registry() -> ToolRegistry:
             likely_failure_modes=["May slightly soften or sharpen more than desired."],
             reversibility_notes="Skip on retry if the reviewer flags over-editing.",
             operation=texture_softness_bias_from_reference,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="paint_strokes",
+            description="Apply explicit manual paint strokes with round, square, or soft brushes.",
+            input_schema={"strokes": "list[stroke]", "pen": "str", "size": "int", "opacity": "float", "color": "list[int]"},
+            safety_notes=["Uses only explicit user-provided strokes.", "Cannot fabricate unseen content outside the painted mark."],
+            parameter_bounds={"size": (1, 128), "opacity": (0.0, 1.0), "pen": ["round", "square", "soft"]},
+            expected_effect="Performs localized painterly touch-up or annotation using direct strokes.",
+            likely_failure_modes=["Poor stroke placement can cover genuine image detail.", "Overly opaque strokes may look artificial."],
+            reversibility_notes="Re-run from the original or prior intermediate with adjusted strokes or opacity.",
+            operation=paint_strokes,
         )
     )
     return registry

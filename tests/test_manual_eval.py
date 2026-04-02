@@ -38,7 +38,10 @@ def test_build_manual_eval_from_run(tmp_path: Path) -> None:
     text = markdown_path.read_text(encoding="utf-8")
     assert "# Manual Eval:" in text
     assert "## Images" in text
+    assert "## Step Snapshots" in text
     assert "## Tool Usage" in text
     assert "## Trace" in text
     assert "![Source](" in text
     assert "![Result](" in text
+    assert "data:image" not in text
+    assert "### Step 1:" in text

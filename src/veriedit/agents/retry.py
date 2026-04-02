@@ -17,8 +17,15 @@ class RetryAgent:
         record_node_event(state, node="decide_retry", phase="start")
         review = state["review"] or {}
         policy = state["policy_status"] or {}
+        human_review = state.get("human_review") or {}
         if policy.get("status") == "reject":
             decision = RetryDecision(decision="stop", reason=policy.get("reason", "Rejected by policy"))
+        elif human_review.get("status") == "pending":
+            decision = RetryDecision(decision="stop", reason=human_review.get("reason", "Human approval required before continuing."))
+        elif human_review.get("status") == "rejected":
+            decision = RetryDecision(decision="stop", reason="Human reviewer rejected the result.")
+        elif human_review.get("status") == "approved":
+            decision = RetryDecision(decision="accept", reason="Human reviewer approved the result.")
         elif (
             review.get("prompt_score", 0.0) >= self.config.prompt_satisfaction_threshold
             and review.get("artifact_risk", 1.0) <= self.config.artifact_risk_threshold

@@ -13,6 +13,7 @@ def edit_image(
     preserve_metadata: bool = False,
     save_intermediates: bool = True,
     llm_model: str = "gemini-3-flash",
+    enable_human_approval: bool = True,
 ) -> EditResult:
     request = EditRequest(
         source_image=source_image,
@@ -23,6 +24,7 @@ def edit_image(
         preserve_metadata=preserve_metadata,
         save_intermediates=save_intermediates,
         llm_model=llm_model,
+        enable_human_approval=enable_human_approval,
     )
     return VeriEditWorkflow().run(request)
 

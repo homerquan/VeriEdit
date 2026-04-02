@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+import secrets
 import shutil
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +17,9 @@ def ensure_run_artifacts(
     output_path: str | None = None,
     reference_image: str | None = None,
 ) -> RunArtifacts:
-    run_id = uuid.uuid4().hex[:12]
+    artifact_root = Path(artifact_root).expanduser()
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    run_id = _generate_run_id(artifact_root)
     run_dir = artifact_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     source_copy = run_dir / Path(source_image).name
@@ -26,11 +28,8 @@ def ensure_run_artifacts(
     if reference_image:
         reference_copy = run_dir / Path(reference_image).name
         shutil.copy2(reference_image, reference_copy)
-    resolved_output = Path(output_path) if output_path else run_dir / "edited.png"
-    if output_path and not resolved_output.is_absolute():
-        resolved_output = Path.cwd() / resolved_output
-    elif not output_path and not resolved_output.is_absolute():
-        resolved_output = run_dir / resolved_output
+    output_name = _output_filename(source_image=source_image, output_path=output_path)
+    resolved_output = run_dir / output_name
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
     return RunArtifacts(
         run_id=run_id,
@@ -77,3 +76,21 @@ def write_text(text: str, path: str | Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return output_path
+
+
+def _generate_run_id(artifact_root: Path, length: int = 8) -> str:
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    for _ in range(32):
+        candidate = "".join(secrets.choice(alphabet) for _ in range(length))
+        if not (artifact_root / candidate).exists():
+            return candidate
+    raise RuntimeError("Unable to allocate a unique VeriEdit run id.")
+
+
+def _output_filename(source_image: str, output_path: str | None) -> str:
+    if output_path:
+        candidate = Path(output_path).name
+        if candidate:
+            return candidate
+    suffix = Path(source_image).suffix or ".png"
+    return f"result{suffix}"

@@ -15,6 +15,7 @@ class EditRequest(BaseModel):
     preserve_metadata: bool = False
     save_intermediates: bool = True
     llm_model: str = "gemini-3-flash"
+    enable_human_approval: bool = True
 
 
 class PolicyStatus(BaseModel):
@@ -78,6 +79,9 @@ class ExecutionRecord(BaseModel):
     step_index: int
     tool: str
     params: dict[str, Any]
+    execution_mode: str = "global"
+    mask_name: str | None = None
+    mask_coverage: float = 0.0
     before_metrics: dict[str, float] = Field(default_factory=dict)
     after_metrics: dict[str, float] = Field(default_factory=dict)
     output_path: str
@@ -103,6 +107,15 @@ class RetryDecision(BaseModel):
     strategy: str | None = None
 
 
+class HumanReviewRequest(BaseModel):
+    status: Literal["not_needed", "pending", "approved", "rejected"] = "not_needed"
+    reason: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    manual_eval_md: str | None = None
+    approval_json: str | None = None
+
+
 class FinalResult(BaseModel):
     success: bool
     output_image: str | None = None
@@ -116,6 +129,10 @@ class FinalResult(BaseModel):
     review_summary: str = ""
     stop_reason: str | None = None
     run_dir: str | None = None
+    human_review_status: str | None = None
+    human_review_reason: str | None = None
+    manual_eval_md: str | None = None
+    human_approval_json: str | None = None
 
 
 class AgentLog(BaseModel):
@@ -142,6 +159,10 @@ class EditResult(BaseModel):
     stop_reason: str | None = None
     run_dir: str | None = None
     run_id: str | None = None
+    human_review_status: str | None = None
+    human_review_reason: str | None = None
+    manual_eval_md: str | None = None
+    human_approval_json: str | None = None
 
 
 class WorkflowState(TypedDict):
@@ -162,6 +183,7 @@ class WorkflowState(TypedDict):
     observation_trace: list[dict[str, Any]]
     intermediate_paths: list[str]
     review: dict[str, Any] | None
+    human_review: dict[str, Any] | None
     retry_decision: dict[str, Any] | None
     final_result: dict[str, Any] | None
     logs: list[dict[str, Any]]

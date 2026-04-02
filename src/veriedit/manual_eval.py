@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
-import mimetypes
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,7 +18,7 @@ def build_manual_eval_markdown(
     report_json: str | None = None,
     observation_json: str | None = None,
     title: str | None = None,
-    embed_images: bool = True,
+    embed_images: bool = False,
 ) -> Path:
     source_path = Path(source_image).resolve()
     result_path = Path(result_image).resolve()
@@ -59,7 +57,7 @@ def build_manual_eval_from_run(
     run_id: str,
     artifact_root: str | Path = "runs",
     output_path: str | None = None,
-    embed_images: bool = True,
+    embed_images: bool = False,
 ) -> Path:
     run_dir = Path(artifact_root) / run_id
     report_path = run_dir / "report.json"
@@ -131,6 +129,20 @@ def _render_markdown(
             ]
         )
 
+    lines.append("## Step Snapshots")
+    if executed_steps:
+        for step in executed_steps:
+            step_path = Path(step["output_path"]).resolve()
+            lines.append(f"### Step {step['step_index']}: `{step['tool']}`")
+            lines.append(f"- Status: `{step['status']}`")
+            lines.append(f"- Params: `{json.dumps(step.get('params', {}), sort_keys=True)}`")
+            lines.append(f"- Output: `{step_path}`")
+            lines.append(f"![{step['tool']}]({_image_markdown_src(step_path, output_md_path, embed_images)})")
+            lines.append("")
+    else:
+        lines.append("- No executed steps available.")
+        lines.append("")
+
     lines.append("## Tool Usage")
     if executed_steps:
         for step in executed_steps:
@@ -201,8 +213,4 @@ def _relative_markdown_path(target: Path, output_md_path: Path) -> str:
 
 
 def _image_markdown_src(target: Path, output_md_path: Path, embed_images: bool) -> str:
-    if not embed_images:
-        return _relative_markdown_path(target, output_md_path)
-    mime_type = mimetypes.guess_type(str(target))[0] or "image/png"
-    encoded = base64.b64encode(target.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    return _relative_markdown_path(target, output_md_path)

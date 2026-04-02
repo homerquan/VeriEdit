@@ -21,6 +21,16 @@ This file tracks incremental architecture and implementation work, especially th
 - Added LangGraph-style observability artifacts with node and tool traces for each run.
 - Added a standalone per-edit summary markdown artifact for each photo editing run.
 - Added `manual_eval` generation as both a reusable Python module, a standalone script, and a CLI command to create one markdown file with source/reference/result images plus tool and trace details.
+- Added mask-aware layered execution for local repair tools so dust, scratch, and small-heal steps are composited back only inside detected defect regions with feathered masks.
+- Added executor safeguards that penalize and roll back local repair candidates when they alter preserved regions too broadly.
+- Added a Human Approval Agent and graph node that pauses ambiguous runs with a self-contained manual-eval markdown and a `human_approval.json` decision artifact.
+- Added a `manual-approve` CLI command to record human approval or rejection for a run.
+- Reworked the CLI into a `veriedit` REPL shell with an ASCII banner, guided edit/paint flows, and spinner-based progress feedback while keeping subcommands scriptable.
+- Added a non-generative `paint_strokes` tool plus a `veriedit paint` command for manual brush-based touch-up with soft, round, and square pens.
+- Added Photoshop-inspired retouch tools: `spot_healing_brush`, `healing_brush`, `clone_source_paint`, and `masked_curves_adjustment`.
+- Extended `veriedit paint` so it can drive healing and clone workflows from explicit source and target coordinates.
+- Changed run storage to short alphanumeric run ids and self-contained run folders, with everything now stored under `/tmp/veriedit/<run_id>` by default.
+- Changed final output handling so the result image always lives inside the run folder; `output_path` now controls the filename within that folder.
 
 ### Not Completed Yet
 - Layer-based execution stack.
@@ -30,7 +40,7 @@ Why not: current workflow still commits flattened image states step by step. A t
 Why not: reviewer is still mostly image-level. Region-level review needs tighter coupling to diagnostics masks and execution masks.
 
 - Human approval agent.
-Why not: useful, but outside the current autonomous CLI-focused implementation.
+Why not: basic approval gating now exists, but resume-after-approval orchestration is not yet implemented.
 
 - Semantic preservation models.
 Why not: would likely require optional model assets or external inference dependencies beyond the current classical MVP.
