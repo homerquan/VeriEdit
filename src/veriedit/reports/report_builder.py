@@ -22,6 +22,7 @@ def build_report_payload(state: WorkflowState) -> dict:
         "style_profile": state["style_profile"],
         "plan": state["plan"],
         "plan_history": state.get("plan_history", []),
+        "tool_trial_history": state.get("tool_trial_history", []),
         "executed_steps": state["executed_steps"],
         "agent_handoffs": state.get("agent_handoffs", []),
         "observation_trace": state.get("observation_trace", []),
@@ -121,6 +122,27 @@ def build_markdown_report(state: WorkflowState) -> str:
             lines.append(f"- {item}")
     else:
         lines.append("- No explicit planner feedback notes recorded.")
+    lines.extend(
+        [
+            "",
+            "## Tool Trials",
+        ]
+    )
+    tool_trials = state.get("tool_trial_history", [])
+    if tool_trials:
+        for item in tool_trials:
+            lines.append(
+                f"- Iteration {item.get('iteration')}: tool=`{item.get('tool')}` "
+                f"attempted={item.get('attempted')} accepted={item.get('accepted')} "
+                f"trials={len(item.get('trials', []))} reason={item.get('reason') or 'n/a'}"
+            )
+            region = item.get("selected_region")
+            if isinstance(region, dict):
+                lines.append(
+                    f"selected region: `{region['x']},{region['y']},{region['width']},{region['height']}`"
+                )
+    else:
+        lines.append("- No tool-trial history recorded.")
     lines.extend(
         [
             "",
@@ -238,7 +260,7 @@ def build_observation_markdown(state: WorkflowState) -> str:
         "## Node Flow",
         "```mermaid",
         "flowchart TD",
-        '    A["policy_check"] --> B["diagnose_inputs"] --> C["plan_edits"] --> D["execute_plan"] --> E["review_result"] --> F["human_approval_gate"] --> G["decide_retry"]',
+        '    A["policy_check"] --> B["diagnose_inputs"] --> C["plan_edits"] --> D["trial_tools"] --> E["execute_plan"] --> F["review_result"] --> G["human_approval_gate"] --> H["decide_retry"]',
         "```",
         "",
         "## Trace Events",

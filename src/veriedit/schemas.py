@@ -13,6 +13,7 @@ class EditRequest(BaseModel):
     output_path: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = Field(default=5, ge=1, le=10)
+    max_tool_trials: int = Field(default=10, ge=1, le=20)
     preserve_metadata: bool = False
     save_intermediates: bool = True
     llm_model: str = "gemini-3-flash"
@@ -219,6 +220,7 @@ class WorkflowState(TypedDict):
     style_profile: dict[str, Any] | None
     plan: dict[str, Any] | None
     plan_history: list[dict[str, Any]]
+    tool_trial_history: list[dict[str, Any]]
     executed_steps: list[dict[str, Any]]
     agent_handoffs: list[dict[str, Any]]
     observation_trace: list[dict[str, Any]]

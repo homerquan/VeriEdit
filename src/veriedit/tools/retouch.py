@@ -350,7 +350,14 @@ def _composite_patch(
     window = output[y0:y1, x0:x1]
     patch_window = patch[patch_y0:patch_y1, patch_x0:patch_x1]
     alpha_window = alpha[patch_y0:patch_y1, patch_x0:patch_x1]
-    output[y0:y1, x0:x1] = window * (1.0 - alpha_window) + patch_window * alpha_window
+    crop_h = min(window.shape[0], patch_window.shape[0], alpha_window.shape[0])
+    crop_w = min(window.shape[1], patch_window.shape[1], alpha_window.shape[1])
+    if crop_h <= 0 or crop_w <= 0:
+        return output
+    output[y0 : y0 + crop_h, x0 : x0 + crop_w] = (
+        window[:crop_h, :crop_w] * (1.0 - alpha_window[:crop_h, :crop_w])
+        + patch_window[:crop_h, :crop_w] * alpha_window[:crop_h, :crop_w]
+    )
     return output
 
 

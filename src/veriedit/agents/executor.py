@@ -187,6 +187,7 @@ def _choose_candidate(spec, current_image, params, reference_image, execution_co
         "small_defect_heal",
         "unsharp_mask",
         "stroke_paint",
+        "clone_stamp",
     }:
         variants.append(("softened", softened))
 
@@ -250,6 +251,9 @@ def _candidate_score(tool_name: str, metrics: dict, comparison: dict[str, float]
     elif tool_name == "stroke_paint":
         score += comparison.get("preserved_region_change_ratio", 0.0) * 5.0
         score -= comparison.get("target_region_change_ratio", 0.0) * 0.9
+    elif tool_name == "clone_stamp":
+        score += comparison.get("preserved_region_change_ratio", 0.0) * 5.5
+        score -= comparison.get("target_region_change_ratio", 0.0) * 1.0
     return score
 
 
@@ -301,6 +305,16 @@ def _execution_context(
                 "mask_coverage": float(np.mean(mask)),
             }
         return {"mode": "global", "mask_name": None, "mask": None, "mask_coverage": 0.0}
+    if tool_name == "clone_stamp":
+        mask = _clone_mask_from_params(image_shape, params)
+        if mask.any():
+            return {
+                "mode": "masked_local_repair",
+                "mask_name": "clone_roi",
+                "mask": mask,
+                "mask_coverage": float(np.mean(mask)),
+            }
+        return {"mode": "global", "mask_name": None, "mask": None, "mask_coverage": 0.0}
     local_mask_name = {
         "dust_cleanup": "dust_mask",
         "scratch_candidate_cleanup": "scratch_mask",
@@ -337,6 +351,40 @@ def _mask_from_boxes(shape: tuple[int, int], boxes: object) -> np.ndarray:
         x1 = min(shape[1], x + width)
         y1 = min(shape[0], y + height)
         mask[y0:y1, x0:x1] = True
+    return mask
+
+
+def _clone_mask_from_params(shape: tuple[int, int], params: dict[str, object]) -> np.ndarray:
+    region = params.get("target_region")
+    if isinstance(region, dict):
+        radius = int(params.get("radius", 8))
+        expanded = {
+            "x": int(region.get("x", 0)) - radius * 2,
+            "y": int(region.get("y", 0)) - radius * 2,
+            "width": int(region.get("width", 0)) + radius * 4,
+            "height": int(region.get("height", 0)) + radius * 4,
+        }
+        return _mask_from_boxes(shape, [expanded])
+    strokes = params.get("strokes", [])
+    mask = np.zeros(shape, dtype=bool)
+    radius = int(params.get("radius", 8))
+    if not isinstance(strokes, list):
+        return mask
+    for stroke in strokes:
+        if not isinstance(stroke, dict):
+            continue
+        points = stroke.get("points", [])
+        if not isinstance(points, list):
+            continue
+        xs = [int(point[0]) for point in points if isinstance(point, list) and len(point) == 2]
+        ys = [int(point[1]) for point in points if isinstance(point, list) and len(point) == 2]
+        if not xs or not ys:
+            continue
+        x = max(0, min(xs) - radius)
+        y = max(0, min(ys) - radius)
+        width = min(shape[1], max(xs) + radius + 1) - x
+        height = min(shape[0], max(ys) + radius + 1) - y
+        mask |= _mask_from_boxes(shape, [{"x": x, "y": y, "width": width, "height": height}])
     return mask
 
 

@@ -65,6 +65,7 @@ def edit(
     output_folder: Optional[Path] = typer.Option(None, "--output-folder", file_okay=False, help="Folder where run directories should be created."),
     allow_tool: list[str] = typer.Option([], "--allow-tool", help="Restrict the workflow to specific tool names. Repeat to allow multiple tools."),
     max_iterations: int = typer.Option(5, "--max-iterations", min=1, max=10),
+    max_tool_trials: int = typer.Option(10, "--max-tool-trials", min=1, max=20, help="Maximum bounded local tool trials before execution."),
     save_intermediates: bool = typer.Option(True, "--save-intermediates/--no-save-intermediates"),
     enable_human_approval: bool = typer.Option(True, "--human-approval/--no-human-approval"),
 ) -> None:
@@ -75,6 +76,7 @@ def edit(
         output_folder=output_folder,
         allowed_tools=allow_tool,
         max_iterations=max_iterations,
+        max_tool_trials=max_tool_trials,
         save_intermediates=save_intermediates,
         enable_human_approval=enable_human_approval,
     )
@@ -318,6 +320,7 @@ def _interactive_edit_wizard() -> None:
     reference_raw = Prompt.ask("Reference image path (optional)", default="", show_default=False).strip()
     output_folder_raw = Prompt.ask("Output folder (optional, default /tmp/veriedit)", default="", show_default=False).strip()
     max_iterations = IntPrompt.ask("Max iterations", default=5)
+    max_tool_trials = IntPrompt.ask("Max tool trials", default=10)
     enable_human_approval = Confirm.ask("Enable human approval for ambiguous results?", default=True)
     allowed_tools_raw = Prompt.ask(
         "Allowed tools (optional, comma-separated tool names; blank means all)",
@@ -331,6 +334,7 @@ def _interactive_edit_wizard() -> None:
         output_folder=Path(output_folder_raw).expanduser() if output_folder_raw else None,
         allowed_tools=[item.strip() for item in allowed_tools_raw.split(",") if item.strip()],
         max_iterations=max_iterations,
+        max_tool_trials=max_tool_trials,
         save_intermediates=True,
         enable_human_approval=enable_human_approval,
     )
@@ -422,6 +426,7 @@ def _run_edit_command(
     output_folder: Optional[Path],
     allowed_tools: list[str],
     max_iterations: int,
+    max_tool_trials: int,
     save_intermediates: bool,
     enable_human_approval: bool,
 ) -> None:
@@ -429,7 +434,7 @@ def _run_edit_command(
     workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=output_folder or WorkflowConfig().artifact_root))
     result = _run_with_spinner(
         label=f"Editing {input.name}",
-        phases=["policy check", "diagnostics", "planning", "execution", "review", "approval gate", "reporting"],
+        phases=["policy check", "diagnostics", "planning", "tool trials", "execution", "review", "approval gate", "reporting"],
         fn=lambda: workflow.run(
             EditRequest(
                 source_image=str(input),
@@ -438,6 +443,7 @@ def _run_edit_command(
                 output_path=None,
                 allowed_tools=normalized_allowed_tools,
                 max_iterations=max_iterations,
+                max_tool_trials=max_tool_trials,
                 save_intermediates=save_intermediates,
                 enable_human_approval=enable_human_approval,
             )

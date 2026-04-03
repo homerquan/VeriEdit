@@ -29,6 +29,7 @@ class AG2WorkflowRuntime:
         policy_agent: Any,
         diagnostics_agent: Any,
         planner_agent: Any,
+        tool_trial_agent: Any,
         executor_agent: Any,
         reviewer_agent: Any,
         human_approval_agent: Any,
@@ -40,6 +41,7 @@ class AG2WorkflowRuntime:
         self.policy_agent = policy_agent
         self.diagnostics_agent = diagnostics_agent
         self.planner_agent = planner_agent
+        self.tool_trial_agent = tool_trial_agent
         self.executor_agent = executor_agent
         self.reviewer_agent = reviewer_agent
         self.human_approval_agent = human_approval_agent
@@ -63,6 +65,7 @@ class AG2WorkflowRuntime:
         policy = self._make_agent("PolicyAgent", "Policy gate for non-generative image editing.")
         diagnostics = self._make_agent("DiagnosticsAgent", "Image diagnostics and defect mapping.")
         planner = self._make_agent("PlannerAgent", "Conservative edit planning agent.")
+        tool_trial = self._make_agent("ToolTrialAgent", "Tests bounded local repair candidates, reverts weak ones, and forwards the best step.")
         executor = self._make_agent("ExecutorAgent", "Executes approved tool steps on the image.")
         reviewer = self._make_agent("ReviewerAgent", "Reviews realism, preservation, and prompt satisfaction.")
         human_approval = self._make_agent("HumanApprovalAgent", "Requests human review when ambiguity is high.")
@@ -70,7 +73,7 @@ class AG2WorkflowRuntime:
         finalizer = self._make_agent("FinalizerAgent", "Finalizes artifacts and outputs.")
 
         groupchat = GroupChat(
-            agents=[coordinator, policy, diagnostics, planner, executor, reviewer, human_approval, retry, finalizer],
+            agents=[coordinator, policy, diagnostics, planner, tool_trial, executor, reviewer, human_approval, retry, finalizer],
             messages=[],
             max_round=max(12, state["max_iterations"] * 8 + 4),
             speaker_selection_method=self._select_next_speaker,
@@ -89,6 +92,7 @@ class AG2WorkflowRuntime:
         policy.register_reply(manager, self._build_reply("policy", self.policy_agent.run))
         diagnostics.register_reply(manager, self._build_reply("diagnostics", self.diagnostics_agent.run))
         planner.register_reply(manager, self._build_reply("planner", self.planner_agent.run))
+        tool_trial.register_reply(manager, self._build_reply("tool_trial", self.tool_trial_agent.run))
         executor.register_reply(manager, self._build_reply("executor", self.executor_agent.run))
         reviewer.register_reply(manager, self._build_reply("reviewer", self.reviewer_agent.run))
         human_approval.register_reply(manager, self._build_reply("human_approval", self.human_approval_agent.run))
@@ -139,6 +143,8 @@ class AG2WorkflowRuntime:
         if last_speaker.name == "DiagnosticsAgent":
             return agents["PlannerAgent"]
         if last_speaker.name == "PlannerAgent":
+            return agents["ToolTrialAgent"]
+        if last_speaker.name == "ToolTrialAgent":
             return agents["ExecutorAgent"]
         if last_speaker.name == "ExecutorAgent":
             return agents["ReviewerAgent"]
@@ -164,6 +170,7 @@ class AG2WorkflowRuntime:
             "reference_image_path": state["reference_image_path"],
             "allowed_tools": state["request"].get("allowed_tools", []),
             "max_iterations": state["max_iterations"],
+            "max_tool_trials": state["request"].get("max_tool_trials", 10),
         }
         return (
             "Run the VeriEdit restoration workflow through the AG2 runtime.\n"
@@ -189,6 +196,13 @@ class AG2WorkflowRuntime:
         if label == "planner":
             plan = state["plan"] or {}
             return f"Plan complete: objective={plan.get('objective')} steps={len(plan.get('steps', []))}"
+        if label == "tool_trial":
+            latest_trial = (state.get("tool_trial_history") or [])[-1] if state.get("tool_trial_history") else {}
+            return (
+                "Tool trials complete: "
+                f"accepted={latest_trial.get('accepted')} "
+                f"trials={len(latest_trial.get('trials', []))}"
+            )
         if label == "executor":
             return f"Execution complete: executed_steps={len(state['executed_steps'])} current_image={state['current_image_path']}"
         if label == "reviewer":
@@ -213,6 +227,7 @@ class AG2WorkflowRuntime:
             "policy": "policy",
             "diagnostics": "diagnostics",
             "planner": "planner",
+            "tool_trial": "tool_trial",
             "executor": "executor",
             "reviewer": "reviewer",
             "human_approval": "human_approval",

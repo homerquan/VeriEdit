@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from veriedit.agents import DiagnosticsAgent, ExecutorAgent, HumanApprovalAgent, PlannerAgent, RetryAgent, ReviewerAgent
+from veriedit.agents import DiagnosticsAgent, ExecutorAgent, HumanApprovalAgent, PlannerAgent, RetryAgent, ReviewerAgent, ToolTrialAgent
 from veriedit.config import WorkflowConfig
 from veriedit.io.writer import ensure_run_artifacts
 from veriedit.policy import PolicyAgent
@@ -18,6 +18,7 @@ class VeriEditWorkflow:
         self.policy_agent = PolicyAgent()
         self.diagnostics_agent = DiagnosticsAgent()
         self.planner_agent = PlannerAgent(model=self.config.default_llm_model)
+        self.tool_trial_agent = ToolTrialAgent()
         self.executor_agent = ExecutorAgent()
         self.reviewer_agent = ReviewerAgent(model=self.config.default_llm_model)
         self.human_approval_agent = HumanApprovalAgent(config=self.config)
@@ -27,6 +28,7 @@ class VeriEditWorkflow:
                 policy_agent=self.policy_agent,
                 diagnostics_agent=self.diagnostics_agent,
                 planner_agent=self.planner_agent,
+                tool_trial_agent=self.tool_trial_agent,
                 executor_agent=self.executor_agent,
                 reviewer_agent=self.reviewer_agent,
                 human_approval_agent=self.human_approval_agent,
@@ -60,6 +62,7 @@ class VeriEditWorkflow:
             "style_profile": None,
             "plan": None,
             "plan_history": [],
+            "tool_trial_history": [],
             "executed_steps": [],
             "agent_handoffs": [],
             "observation_trace": [],
@@ -87,6 +90,7 @@ class VeriEditWorkflow:
         while True:
             state = self.diagnostics_agent.run(state)
             state = self.planner_agent.run(state)
+            state = self.tool_trial_agent.run(state)
             state = self.executor_agent.run(state)
             state = self.reviewer_agent.run(state)
             state = self.human_approval_agent.run(state)

@@ -37,7 +37,7 @@ class PlannerAgent:
         record_agent_handoff(
             state,
             from_agent="planner",
-            to_agent="executor",
+            to_agent="tool_trial",
             summary=f"Planned {len(plan.steps)} steps for '{plan.objective}' across {len(plan.repair_strategy)} stages.",
             key_points=[
                 f"problems={', '.join(problem_labels) or 'none'}",
