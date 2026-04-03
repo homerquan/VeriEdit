@@ -59,11 +59,13 @@ class VeriEditWorkflow:
             "diagnostic_artifacts": {},
             "style_profile": None,
             "plan": None,
+            "plan_history": [],
             "executed_steps": [],
             "agent_handoffs": [],
             "observation_trace": [],
             "intermediate_paths": [],
             "review": None,
+            "review_history": [],
             "human_review": None,
             "retry_decision": None,
             "final_result": None,
@@ -82,8 +84,8 @@ class VeriEditWorkflow:
         state = self.policy_agent.run(state)
         if state["policy_status"].get("status") == "reject":
             return self._finalize_state(state)
-        state = self.diagnostics_agent.run(state)
         while True:
+            state = self.diagnostics_agent.run(state)
             state = self.planner_agent.run(state)
             state = self.executor_agent.run(state)
             state = self.reviewer_agent.run(state)

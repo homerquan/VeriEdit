@@ -21,11 +21,12 @@ def rank_tools(
         str(value) for key, value in (retry_context or {}).items() if key in {"reason", "strategy"}
     ).lower()
     recommendations: list[ToolRecommendation] = []
-    source = diagnostics.get("source", {})
+    current = diagnostics.get("current") or diagnostics.get("source", {})
+    baseline = diagnostics.get("source", {})
     for spec in registry.specs():
         if spec.name in blocked_tools:
             continue
-        score, rationale, params_hint = _score_tool(spec, prompt_lower, source, region_summary, retry_text, has_reference)
+        score, rationale, params_hint = _score_tool(spec, prompt_lower, current, baseline, region_summary, retry_text, has_reference)
         if score <= 0.0:
             continue
         priority = "primary" if score >= 1.8 else "secondary" if score >= 1.0 else "fallback"
@@ -46,7 +47,8 @@ def rank_tools(
 def _score_tool(
     spec: ToolSpec,
     prompt: str,
-    source: dict[str, Any],
+    current: dict[str, Any],
+    baseline: dict[str, Any],
     region_summary: dict[str, Any],
     retry_text: str,
     has_reference: bool,
@@ -58,23 +60,23 @@ def _score_tool(
     prompt_requests_local_repair = any(word in prompt for word in ("repair", "retouch", "patch", "local", "damaged", "fix"))
     if "reference" in tags and not has_reference:
         return 0.0, "reference tool skipped without reference image", {}
-    if "yellow cast" in prompt or "white balance" in prompt or source.get("yellow_cast", 0.0) > 0.58:
+    if "yellow cast" in prompt or "white balance" in prompt or current.get("yellow_cast", 0.0) > 0.58:
         if "color_cast" in tags:
             score += 2.2
             reasons.append("match color-cast correction need")
-    if "contrast" in prompt or "faded" in prompt or source.get("contrast_score", 1.0) < 0.52 or source.get("fade_score", 0.0) > 0.42:
+    if "contrast" in prompt or "faded" in prompt or current.get("contrast_score", 1.0) < 0.52 or current.get("fade_score", 0.0) > 0.42:
         if "contrast" in tags or "tone" in tags:
             score += 1.8
             reasons.append("match tonal recovery need")
-    if "dust" in prompt or "speck" in prompt or source.get("dust_candidates", 0) > 24:
+    if "dust" in prompt or "speck" in prompt or current.get("dust_candidates", 0) > 24:
         if "dust" in tags:
             score += 2.0
             reasons.append("match dust cleanup need")
-    if "scratch" in prompt or source.get("scratch_candidates", 0) > 12:
+    if "scratch" in prompt or current.get("scratch_candidates", 0) > 12:
         if "scratch" in tags:
             score += 2.0
             reasons.append("match scratch cleanup need")
-    if source.get("noise_score", 0.0) > 0.08 or "noise" in prompt or "grain" in prompt:
+    if current.get("noise_score", 0.0) > 0.08 or "noise" in prompt or "grain" in prompt:
         if "denoise" in tags:
             score += 1.5
             reasons.append("match noise reduction need")
@@ -82,7 +84,7 @@ def _score_tool(
         if "sharpen" in tags:
             score += 1.4
             reasons.append("match detail enhancement request")
-    if source.get("edge_damage_ratio", 0.0) > 0.08 or float(region_summary.get("largest_defect_ratio", 0.0)) > 0.0008:
+    if current.get("edge_damage_ratio", 0.0) > 0.08 or float(region_summary.get("largest_defect_ratio", 0.0)) > 0.0008:
         if "local_repair" in tags:
             score += 1.6
             reasons.append("region summary favors localized repair")
@@ -118,6 +120,11 @@ def _score_tool(
     if spec.name == "stroke_paint" and prompt_requests_local_repair:
         score += 0.8
         reasons.append("closed-loop stroke repair preferred for autonomous local repair")
+    if current and baseline:
+        if current.get("dust_candidates", 0) < baseline.get("dust_candidates", 0) and "dust" in tags:
+            score -= 0.25
+        if current.get("scratch_candidates", 0) < baseline.get("scratch_candidates", 0) and "scratch" in tags:
+            score -= 0.25
 
     if spec.name == "stroke_paint":
         params_hint = {"stroke_budget": 10 if "natural" in prompt else 14, "candidate_count": 14, "pen": "soft"}

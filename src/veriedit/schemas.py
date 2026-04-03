@@ -12,7 +12,7 @@ class EditRequest(BaseModel):
     reference_image: str | None = None
     output_path: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
-    max_iterations: int = Field(default=3, ge=1, le=10)
+    max_iterations: int = Field(default=5, ge=1, le=10)
     preserve_metadata: bool = False
     save_intermediates: bool = True
     llm_model: str = "gemini-3-flash"
@@ -57,6 +57,7 @@ class StyleProfile(BaseModel):
 
 class DiagnosticsBundle(BaseModel):
     source: SourceDiagnostics
+    current: SourceDiagnostics | None = None
     reference: StyleProfile | None = None
     regions: dict[str, Any] = Field(default_factory=dict)
     artifacts: dict[str, str] = Field(default_factory=dict)
@@ -77,6 +78,21 @@ class ToolRecommendation(BaseModel):
     mode_hint: Literal["global", "masked_local_repair", "reference_guided", "manual"] = "global"
 
 
+class ProblemAssessment(BaseModel):
+    problem: str
+    severity: Literal["low", "medium", "high"] = "medium"
+    evidence: list[str] = Field(default_factory=list)
+    desired_outcome: str = ""
+    preferred_scope: Literal["global", "local", "mixed"] = "mixed"
+
+
+class RepairStage(BaseModel):
+    stage: str
+    goal: str
+    selected_tools: list[str] = Field(default_factory=list)
+    rationale: str = ""
+
+
 class EditPlan(BaseModel):
     objective: str
     must_preserve: list[str] = Field(default_factory=list)
@@ -84,6 +100,9 @@ class EditPlan(BaseModel):
     steps: list[PlanStep] = Field(default_factory=list)
     acceptance: list[str] = Field(default_factory=list)
     recommended_tools: list[ToolRecommendation] = Field(default_factory=list)
+    detected_problems: list[ProblemAssessment] = Field(default_factory=list)
+    repair_strategy: list[RepairStage] = Field(default_factory=list)
+    feedback_applied: list[str] = Field(default_factory=list)
 
 
 class AgentHandoff(BaseModel):
@@ -199,11 +218,13 @@ class WorkflowState(TypedDict):
     diagnostic_artifacts: dict[str, str]
     style_profile: dict[str, Any] | None
     plan: dict[str, Any] | None
+    plan_history: list[dict[str, Any]]
     executed_steps: list[dict[str, Any]]
     agent_handoffs: list[dict[str, Any]]
     observation_trace: list[dict[str, Any]]
     intermediate_paths: list[str]
     review: dict[str, Any] | None
+    review_history: list[dict[str, Any]]
     human_review: dict[str, Any] | None
     retry_decision: dict[str, Any] | None
     final_result: dict[str, Any] | None

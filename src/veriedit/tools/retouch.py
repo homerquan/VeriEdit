@@ -80,6 +80,63 @@ def healing_brush(image: np.ndarray, params: dict[str, Any], _reference: np.ndar
     return _source_retouch(image, params, default_mode="normal")
 
 
+def clone_stamp(image: np.ndarray, params: dict[str, Any], _reference: np.ndarray | None) -> tuple[np.ndarray, dict[str, Any]]:
+    source_point = params.get("source_point")
+    radius = int(params.get("radius", 10))
+    opacity = float(params.get("opacity", 0.95))
+    rotation = float(params.get("rotation", 0.0))
+    flip_horizontal = bool(params.get("flip_horizontal", False))
+    flip_vertical = bool(params.get("flip_vertical", False))
+    feather = float(params.get("feather", max(1.0, radius * 0.25)))
+    aligned = bool(params.get("aligned", True))
+    spacing = float(params.get("spacing", max(1.0, radius * 0.45)))
+    if not source_point:
+        return image.copy(), {"applied": False, "stamp_count": 0}
+
+    stroke_paths = _stroke_paths(params.get("strokes", []))
+    if stroke_paths:
+        dense_points: list[tuple[int, int]] = []
+        for path in stroke_paths:
+            dense_points.extend(_dense_path_points(path, spacing))
+        target_points = dense_points
+    else:
+        target_points = _dense_path_points(_point_list(params.get("target_points", [])), spacing)
+
+    if not target_points:
+        return image.copy(), {"applied": False, "stamp_count": 0}
+
+    source_xy = (int(source_point[0]), int(source_point[1]))
+    base_image = image.astype(np.uint8)
+    output = image.astype(np.float32).copy()
+    first_target = target_points[0]
+    offset = (source_xy[0] - first_target[0], source_xy[1] - first_target[1])
+    alpha = _patch_alpha(((radius * 2) + 1, (radius * 2) + 1), radius, feather) * float(np.clip(opacity, 0.0, 1.0))
+
+    for point in target_points:
+        if aligned:
+            sample_point = (int(point[0] + offset[0]), int(point[1] + offset[1]))
+        else:
+            sample_point = source_xy
+        source_patch = _extract_patch(base_image, sample_point, radius).astype(np.float32)
+        source_patch = _transform_patch(source_patch, rotation, flip_horizontal, flip_vertical)
+        output = _composite_patch(output, source_patch, alpha, point, radius)
+
+    return np.clip(output, 0, 255).astype(np.uint8), {
+        "applied": True,
+        "stamp_count": len(target_points),
+        "target_count": len(target_points),
+        "source_point": [int(source_xy[0]), int(source_xy[1])],
+        "radius": radius,
+        "opacity": opacity,
+        "feather": feather,
+        "aligned": aligned,
+        "spacing": spacing,
+        "rotation": rotation,
+        "flip_horizontal": flip_horizontal,
+        "flip_vertical": flip_vertical,
+    }
+
+
 def clone_source_paint(image: np.ndarray, params: dict[str, Any], _reference: np.ndarray | None) -> tuple[np.ndarray, dict[str, Any]]:
     return _source_retouch(image, params, default_mode="replace")
 
@@ -128,6 +185,7 @@ def _source_retouch(image: np.ndarray, params: dict[str, Any], default_mode: str
     return np.clip(output, 0, 255).astype(np.uint8), {
         "applied": True,
         "target_count": len(target_points),
+        "source_point": [int(source_xy[0]), int(source_xy[1])],
         "radius": radius,
         "mode": mode,
         "rotation": rotation,
@@ -176,6 +234,41 @@ def _point_list(raw_points: Any) -> list[tuple[int, int]]:
         if isinstance(point, (list, tuple)) and len(point) == 2:
             points.append((int(point[0]), int(point[1])))
     return points
+
+
+def _stroke_paths(raw_strokes: Any) -> list[list[tuple[int, int]]]:
+    paths: list[list[tuple[int, int]]] = []
+    if not isinstance(raw_strokes, list):
+        return paths
+    for stroke in raw_strokes:
+        if not isinstance(stroke, dict):
+            continue
+        path = _point_list(stroke.get("points", []))
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _dense_path_points(points: list[tuple[int, int]], spacing: float) -> list[tuple[int, int]]:
+    if not points:
+        return []
+    if len(points) == 1:
+        return points
+    dense = [points[0]]
+    step = max(1.0, float(spacing))
+    for start, end in zip(points, points[1:]):
+        dx = float(end[0] - start[0])
+        dy = float(end[1] - start[1])
+        distance = float(np.hypot(dx, dy))
+        segments = max(1, int(np.ceil(distance / step)))
+        for index in range(1, segments + 1):
+            t = index / segments
+            dense.append((int(round(start[0] + dx * t)), int(round(start[1] + dy * t))))
+    deduped: list[tuple[int, int]] = []
+    for point in dense:
+        if not deduped or deduped[-1] != point:
+            deduped.append(point)
+    return deduped
 
 
 def _circle_mask(shape: tuple[int, int], center: tuple[int, int], radius: int) -> np.ndarray:

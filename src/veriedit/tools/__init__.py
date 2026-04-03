@@ -7,6 +7,7 @@ from veriedit.tools.exposure import clahe_contrast, gamma_adjust, histogram_bala
 from veriedit.tools.geometry import crop, deskew, resize
 from veriedit.tools.paint import paint_strokes, stroke_paint
 from veriedit.tools.retouch import (
+    clone_stamp,
     clone_source_paint,
     dust_cleanup,
     healing_brush,
@@ -229,6 +230,19 @@ def build_tool_registry() -> ToolRegistry:
             likely_failure_modes=["Bad source choice can duplicate unwanted texture.", "Replace mode can look abrupt if feathering is too low."],
             reversibility_notes="Choose a new source point, reduce opacity, or switch modes and rerun.",
             operation=healing_brush,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="clone_stamp",
+            description="Photoshop-style aligned clone stamp that follows a stroke path while keeping source offset.",
+            input_schema={"source_point": "[int,int]", "strokes": "list[stroke]", "radius": "int"},
+            safety_notes=["Requires explicit source and target stroke coordinates.", "Uses only existing pixels from the same image."],
+            parameter_bounds={"radius": (1, 160), "opacity": (0.0, 1.0), "feather": (0.0, 80.0), "spacing": (1.0, 80.0)},
+            expected_effect="Repairs larger damaged regions by cloning nearby content continuously along a brush stroke.",
+            likely_failure_modes=["Bad source choice can repeat obvious texture.", "Large strokes can create duplicated patterns if alignment is poor."],
+            reversibility_notes="Choose a better source region, reduce opacity, or rerun from the original.",
+            operation=clone_stamp,
         )
     )
     registry.register(

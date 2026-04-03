@@ -70,7 +70,13 @@ class RetryAgent:
 
 def _strategy_from_review(review: dict, executed_steps: list[dict]) -> str:
     recommendations = " ".join(review.get("recommendations", [])).lower()
+    findings = " ".join(review.get("findings", [])).lower()
+    patch_metrics = review.get("patch_metrics", {})
     recent_rolled_back = {step["tool"] for step in executed_steps[-6:] if step["status"] == "rolled_back"}
+    if patch_metrics.get("preserved_region_change_ratio", 0.0) > 0.24 or "reduce non-local edits" in recommendations:
+        return "preserve unaffected regions; prefer masked local repair; avoid broad tonal edits"
+    if "edit footprint is broader than ideal" in findings:
+        return "keep the next plan narrower and structure-first before any global polish"
     if "non_local_means_denoise" in recent_rolled_back:
         return "reduce denoise and replace with gentler local denoise"
     if "reduce sharpen" in recommendations:
@@ -79,4 +85,6 @@ def _strategy_from_review(review: dict, executed_steps: list[dict]) -> str:
         return "reduce denoise and rerun"
     if "prefer local heal" in recommendations:
         return "replace broad cleanup with local heal"
+    if "targeted defect regions improved" in findings and "preserved regions changed more than expected" in findings:
+        return "keep local repair wins but reduce global cleanup outside the defect mask"
     return "revise plan conservatively"

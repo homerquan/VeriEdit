@@ -14,6 +14,14 @@ This file tracks incremental architecture and implementation work, especially th
 - Added `--allow-tool` to `veriedit edit`, allowing one or more tools to be explicitly whitelisted for debugging or tool-capacity evaluation.
 - Updated reports and manual-eval output to include structured handoffs and better reflect AG2-era runtime behavior.
 - Cleaned up the main user docs so runtime, CLI, and workflow examples match the current implementation.
+- Reworked the planner into a diagnostics-first staged planner that records `detected_problems`, `repair_strategy`, and `feedback_applied`, so agent communication now carries explicit restoration intent and retry feedback.
+- Improved retry-to-planner guidance so retries can explicitly steer the next plan toward local repair, narrower edit footprints, and less aggressive sharpen/denoise choices.
+- Changed the workflow loop to re-run diagnostics on the current working image every iteration instead of planning repeatedly from the original input only.
+- Added iterative planning history and review history to reports so multi-round behavior is visible and debuggable.
+- Switched planning to smaller per-iteration batches, with stage selection that can move from local repair to tone/reference/detail work across rounds.
+- Added a simple tool-rotation rule so the planner is less likely to repeat the same batch after weak progress.
+- Added a true manual `clone_stamp` tool with aligned stroke-path cloning, separate from the older transformed patch clone tool, and exposed it through `veriedit paint --tool clone`.
+- Added clone-tool UX improvements: `--spacing` for clone stamp, automatic source-point suggestion for clone tools, and preview overlay images showing the source/target layout before review.
 
 ## 2026-04-01
 

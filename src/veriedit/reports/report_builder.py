@@ -21,10 +21,12 @@ def build_report_payload(state: WorkflowState) -> dict:
         "diagnostic_artifacts": state.get("diagnostic_artifacts", {}),
         "style_profile": state["style_profile"],
         "plan": state["plan"],
+        "plan_history": state.get("plan_history", []),
         "executed_steps": state["executed_steps"],
         "agent_handoffs": state.get("agent_handoffs", []),
         "observation_trace": state.get("observation_trace", []),
         "review": state["review"],
+        "review_history": state.get("review_history", []),
         "human_review": state.get("human_review"),
         "retry_decision": state["retry_decision"],
         "final_result": state["final_result"],
@@ -79,6 +81,48 @@ def build_markdown_report(state: WorkflowState) -> str:
             f"- Acceptance: {', '.join((state['plan'] or {}).get('acceptance', [])) or 'n/a'}",
             f"- Recommended tools: {', '.join(item['tool'] for item in (state['plan'] or {}).get('recommended_tools', [])[:6]) or 'n/a'}",
             f"- Diagnostic board: `{(state.get('diagnostic_artifacts') or {}).get('regions_board', 'n/a')}`",
+            "",
+            "### Detected Problems",
+        ]
+    )
+    detected_problems = (state["plan"] or {}).get("detected_problems", [])
+    if detected_problems:
+        for problem in detected_problems:
+            lines.append(
+                f"- `{problem['problem']}` ({problem['severity']}): {problem.get('desired_outcome') or 'n/a'} "
+                f"[evidence: {', '.join(problem.get('evidence', [])) or 'n/a'}]"
+            )
+    else:
+        lines.append("- No explicit problem assessment recorded.")
+    lines.extend(
+        [
+            "",
+            "### Repair Strategy",
+        ]
+    )
+    repair_strategy = (state["plan"] or {}).get("repair_strategy", [])
+    if repair_strategy:
+        for stage in repair_strategy:
+            lines.append(
+                f"- `{stage['stage']}`: {stage['goal']} "
+                f"(tools: {', '.join(stage.get('selected_tools', [])) or 'none'}; rationale: {stage.get('rationale', 'n/a')})"
+            )
+    else:
+        lines.append("- No staged repair strategy recorded.")
+    lines.extend(
+        [
+            "",
+            "### Feedback Applied",
+        ]
+    )
+    feedback_applied = (state["plan"] or {}).get("feedback_applied", [])
+    if feedback_applied:
+        for item in feedback_applied:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- No explicit planner feedback notes recorded.")
+    lines.extend(
+        [
             "",
             "## What Changed",
         ]
@@ -140,6 +184,31 @@ def build_markdown_report(state: WorkflowState) -> str:
             f"- Output image: `{final.get('output_image')}`",
             f"- Review summary: {final.get('review_summary')}",
             f"- Stop reason: {final.get('stop_reason')}",
+            "",
+            "## Iteration Loop",
+        ]
+    )
+    plan_history = state.get("plan_history", [])
+    review_history = state.get("review_history", [])
+    if plan_history or review_history:
+        for plan_item in plan_history:
+            iteration = plan_item.get("iteration")
+            strategy = ", ".join(stage["stage"] for stage in plan_item.get("repair_strategy", [])[:3]) or "n/a"
+            tools = ", ".join(step["tool"] for step in plan_item.get("steps", [])[:4]) or "none"
+            matching_review = next((item for item in review_history if item.get("iteration") == iteration), None)
+            if matching_review:
+                review_summary = (
+                    f"review={matching_review.get('status')} "
+                    f"prompt_score={matching_review.get('prompt_score')} "
+                    f"artifact_risk={matching_review.get('artifact_risk')}"
+                )
+            else:
+                review_summary = "review=n/a"
+            lines.append(f"- Iteration {iteration}: stages={strategy}; tools={tools}; {review_summary}")
+    else:
+        lines.append("- No iteration history recorded.")
+    lines.extend(
+        [
             "",
             "## Summary",
             _build_edit_summary_text(state),
@@ -207,10 +276,14 @@ def _build_edit_summary_text(state: WorkflowState) -> str:
     human_review = state.get("human_review") or {}
     applied_tools = [step["tool"] for step in state["executed_steps"] if step["status"] == "ok"]
     findings = ", ".join(review.get("findings", [])[:4]) or "No notable findings."
+    detected = ", ".join(item["problem"] for item in plan.get("detected_problems", [])[:4]) or "none"
+    feedback = " ".join(plan.get("feedback_applied", [])[:2]) or "No feedback adjustments recorded."
     return (
         f"Prompt: {state['prompt']}\n\n"
         f"Objective: {plan.get('objective', 'n/a')}\n\n"
+        f"Detected problems: {detected}\n\n"
         f"Applied tools: {', '.join(applied_tools) or 'none'}\n\n"
+        f"Planner feedback: {feedback}\n\n"
         f"Review outcome: status={review.get('status')} prompt_score={review.get('prompt_score')} artifact_risk={review.get('artifact_risk')}\n\n"
         f"Human review: status={human_review.get('status', 'not_needed')} reason={human_review.get('reason', 'n/a')}\n\n"
         f"Highlights: {findings}"

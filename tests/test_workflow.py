@@ -57,10 +57,19 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
     assert payload["diagnostic_artifacts"].get("regions_board")
     assert Path(payload["diagnostic_artifacts"]["regions_board"]).exists()
     assert "recommended_tools" in (payload["plan"] or {})
+    assert payload["plan"].get("detected_problems")
+    assert payload["plan"].get("repair_strategy")
+    assert payload["plan"].get("feedback_applied")
+    assert payload.get("plan_history")
+    assert payload.get("review_history")
+    assert payload["diagnostics"].get("current")
     assert payload.get("agent_handoffs")
     assert any(handoff["from_agent"] == "planner" and handoff["to_agent"] == "executor" for handoff in payload["agent_handoffs"])
     assert any("Variant selected:" in note for step in payload["executed_steps"] for note in step["notes"])
     assert "## Images" in report_md
+    assert "### Detected Problems" in report_md
+    assert "### Repair Strategy" in report_md
+    assert "### Feedback Applied" in report_md
     assert "## Step Snapshots" in report_md
     assert "data:image" not in report_md
     assert "![" in report_md

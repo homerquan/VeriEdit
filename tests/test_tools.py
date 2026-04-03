@@ -10,6 +10,7 @@ def test_registry_contains_expected_tools() -> None:
     assert "paint_strokes" in registry.names()
     assert "spot_healing_brush" in registry.names()
     assert "healing_brush" in registry.names()
+    assert "clone_stamp" in registry.names()
     assert "clone_source_paint" in registry.names()
     assert "masked_curves_adjustment" in registry.names()
     assert "stroke_paint" in registry.names()
@@ -144,6 +145,36 @@ def test_clone_source_paint_supports_flipped_source() -> None:
     assert details["applied"] is True
     assert details["flip_horizontal"] is True
     assert output[48, 48, 0] > image[48, 48, 0]
+
+
+def test_clone_stamp_follows_stroke_with_aligned_offset() -> None:
+    registry = build_tool_registry()
+    image = np.zeros((80, 80, 3), dtype=np.uint8)
+    for x in range(80):
+        image[:, x] = [x * 3, 50, 80]
+    image[40:52, 40:62] = [240, 240, 240]
+    output, details = registry.get("clone_stamp").operation(
+        image,
+        {
+            "source_point": [12, 20],
+            "strokes": [
+                {
+                    "points": [[44, 44], [52, 44], [60, 44]],
+                }
+            ],
+            "radius": 4,
+            "opacity": 1.0,
+            "feather": 1.0,
+            "aligned": True,
+            "spacing": 2.0,
+        },
+        None,
+    )
+    assert details["applied"] is True
+    assert details["aligned"] is True
+    assert details["stamp_count"] > 3
+    assert output[44, 44, 0] < image[44, 44, 0]
+    assert output[44, 60, 0] > output[44, 44, 0]
 
 
 def test_masked_curves_adjustment_changes_only_masked_area() -> None:

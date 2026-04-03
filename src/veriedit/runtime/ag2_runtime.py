@@ -150,7 +150,7 @@ class AG2WorkflowRuntime:
             decision = (self.state["retry_decision"] or {}).get("decision", "stop")
             if decision == "retry":
                 self.state["iteration"] += 1
-                return agents["PlannerAgent"]
+                return agents["DiagnosticsAgent"]
             return agents["FinalizerAgent"]
         if last_speaker.name == "FinalizerAgent":
             return None

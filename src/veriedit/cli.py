@@ -9,6 +9,8 @@ from queue import Queue
 from typing import Any, Optional
 
 import typer
+import numpy as np
+from PIL import Image, ImageDraw
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -62,7 +64,7 @@ def edit(
     reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Optional reference image."),
     output_folder: Optional[Path] = typer.Option(None, "--output-folder", file_okay=False, help="Folder where run directories should be created."),
     allow_tool: list[str] = typer.Option([], "--allow-tool", help="Restrict the workflow to specific tool names. Repeat to allow multiple tools."),
-    max_iterations: int = typer.Option(3, "--max-iterations", min=1, max=10),
+    max_iterations: int = typer.Option(5, "--max-iterations", min=1, max=10),
     save_intermediates: bool = typer.Option(True, "--save-intermediates/--no-save-intermediates"),
     enable_human_approval: bool = typer.Option(True, "--human-approval/--no-human-approval"),
 ) -> None:
@@ -82,7 +84,7 @@ def edit(
 def paint(
     input: Path = typer.Option(..., "--input", exists=True, readable=True, help="Source image path."),
     output: Path = typer.Option(..., "--output", help="Painted output path."),
-    tool: str = typer.Option("paint", "--tool", help="Tool mode: paint, spot-heal, heal, clone, or stroke."),
+    tool: str = typer.Option("paint", "--tool", help="Tool mode: paint, spot-heal, heal, clone, clone-source, or stroke."),
     prompt: str = typer.Option("", "--prompt", help="Optional instruction to record or guide stroke-engine emphasis."),
     reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Optional reference/target image for stroke paint."),
     stroke: list[str] = typer.Option([], "--stroke", help="Stroke polyline as \"x1,y1 x2,y2 ...\". Repeat for multiple strokes."),
@@ -96,12 +98,14 @@ def paint(
     size: int = typer.Option(8, "--size", min=1, max=128, help="Brush size in pixels."),
     opacity: float = typer.Option(0.65, "--opacity", min=0.0, max=1.0, help="Brush opacity."),
     feather: float = typer.Option(4.0, "--feather", min=0.0, help="Feather radius for healing/clone."),
+    spacing: float = typer.Option(0.0, "--spacing", min=0.0, help="Clone-stamp spacing in pixels. Leave at 0 for an automatic spacing based on brush size."),
     rotation: float = typer.Option(0.0, "--rotation", help="Clone/heal source rotation in degrees."),
     stroke_budget: int = typer.Option(12, "--stroke-budget", min=1, max=128, help="Stroke budget for --tool stroke."),
     candidate_count: int = typer.Option(18, "--candidate-count", min=4, max=64, help="Candidate strokes evaluated per iteration for --tool stroke."),
     engine_debug_dir: Optional[Path] = typer.Option(None, "--engine-debug-dir", file_okay=False, help="Optional directory for stroke-engine debug artifacts."),
     flip_horizontal: bool = typer.Option(False, "--flip-horizontal/--no-flip-horizontal"),
     flip_vertical: bool = typer.Option(False, "--flip-vertical/--no-flip-vertical"),
+    preview_overlay: bool = typer.Option(True, "--preview-overlay/--no-preview-overlay", help="Save a preview overlay for clone tools showing source and target placement."),
 ) -> None:
     _run_paint_command(
         input=input,
@@ -120,12 +124,14 @@ def paint(
         size=size,
         opacity=opacity,
         feather=feather,
+        spacing=spacing,
         rotation=rotation,
         stroke_budget=stroke_budget,
         candidate_count=candidate_count,
         engine_debug_dir=engine_debug_dir,
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
+        preview_overlay=preview_overlay,
     )
 
 
@@ -294,7 +300,8 @@ def _print_shell_help() -> None:
     table.add_column("What It Does")
     table.add_row("edit", "Guided image-edit workflow with policy, review, and reports.")
     table.add_row("paint", "Guided brush tool for localized touch-up with soft/round/square pens.")
-    table.add_row("paint --tool heal", "Use Photoshop-style healing or clone tools from explicit coordinates.")
+    table.add_row("paint --tool heal", "Use Photoshop-style healing with explicit source and target coordinates.")
+    table.add_row("paint --tool clone", "Use an aligned Clone Stamp stroke that follows your painted path.")
     table.add_row("paint --tool stroke", "Use iterative planned strokes inside a selected ROI.")
     table.add_row("inspect --input <path>", "Show diagnostic metrics for one image.")
     table.add_row("report --run-id <id>", "Print a run report as JSON.")
@@ -310,7 +317,7 @@ def _interactive_edit_wizard() -> None:
     prompt = Prompt.ask("Editing prompt")
     reference_raw = Prompt.ask("Reference image path (optional)", default="", show_default=False).strip()
     output_folder_raw = Prompt.ask("Output folder (optional, default /tmp/veriedit)", default="", show_default=False).strip()
-    max_iterations = IntPrompt.ask("Max iterations", default=3)
+    max_iterations = IntPrompt.ask("Max iterations", default=5)
     enable_human_approval = Confirm.ask("Enable human approval for ambiguous results?", default=True)
     allowed_tools_raw = Prompt.ask(
         "Allowed tools (optional, comma-separated tool names; blank means all)",
@@ -332,7 +339,7 @@ def _interactive_edit_wizard() -> None:
 def _interactive_paint_wizard() -> None:
     input_path = Path(Prompt.ask("Source image path")).expanduser()
     output_path = Path(Prompt.ask("Output image path")).expanduser()
-    tool = Prompt.ask("Tool", choices=["paint", "spot-heal", "heal", "clone", "stroke"], default="paint")
+    tool = Prompt.ask("Tool", choices=["paint", "spot-heal", "heal", "clone", "clone-source", "stroke"], default="paint")
     pen = Prompt.ask("Pen type", choices=["soft", "round", "square"], default="soft") if tool == "paint" else "soft"
     size = IntPrompt.ask("Brush size", default=8)
     opacity = FloatPrompt.ask("Opacity", default=0.65)
@@ -344,15 +351,18 @@ def _interactive_paint_wizard() -> None:
     source_point = ""
     blend_mode = "normal"
     feather = 4.0
+    spacing = 0.0
     rotation = 0.0
     stroke_budget = 12
     candidate_count = 18
     flip_horizontal = False
     flip_vertical = False
-    if tool in {"heal", "clone"}:
-        source_point = Prompt.ask("Source point as x,y")
+    if tool in {"heal", "clone", "clone-source"}:
+        source_point = Prompt.ask("Source point as x,y (leave blank for auto-suggest on clone tools)", default="", show_default=False).strip()
         blend_mode = Prompt.ask("Blend mode", choices=["normal", "replace"], default="normal" if tool == "heal" else "replace")
         feather = FloatPrompt.ask("Feather", default=4.0)
+        if tool == "clone":
+            spacing = FloatPrompt.ask("Spacing (0 = auto)", default=0.0)
         rotation = FloatPrompt.ask("Rotation", default=0.0)
         flip_horizontal = Confirm.ask("Flip source horizontally?", default=False)
         flip_vertical = Confirm.ask("Flip source vertically?", default=False)
@@ -393,12 +403,14 @@ def _interactive_paint_wizard() -> None:
         size=size,
         opacity=opacity,
         feather=feather,
+        spacing=spacing,
         rotation=rotation,
         stroke_budget=stroke_budget,
         candidate_count=candidate_count,
         engine_debug_dir=None,
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
+        preview_overlay=True,
     )
 
 
@@ -452,12 +464,14 @@ def _run_paint_command(
     size: int,
     opacity: float,
     feather: float,
+    spacing: float,
     rotation: float,
     stroke_budget: int,
     candidate_count: int,
     engine_debug_dir: Optional[Path],
     flip_horizontal: bool,
     flip_vertical: bool,
+    preview_overlay: bool,
 ) -> None:
     image, _ = load_image(input)
     reference_image = None
@@ -481,6 +495,7 @@ def _run_paint_command(
         size=size,
         opacity=opacity,
         feather=feather,
+        spacing=spacing,
         rotation=rotation,
         stroke_budget=stroke_budget,
         candidate_count=candidate_count,
@@ -489,6 +504,9 @@ def _run_paint_command(
         flip_horizontal=flip_horizontal,
         flip_vertical=flip_vertical,
     )
+    preview_path = None
+    if preview_overlay and tool_name in {"clone_stamp", "clone_source_paint"}:
+        preview_path = _save_clone_preview_overlay(image, payload, output)
 
     def _apply() -> tuple[Any, dict[str, Any]]:
         return registry.get(tool_name).operation(image, payload, reference_image)
@@ -505,6 +523,10 @@ def _run_paint_command(
     table.add_row("Tool", tool_name)
     table.add_row("Output", str(output))
     table.add_row("Stroke count", str(details.get("stroke_count", details.get("point_count", details.get("target_count", 0)))))
+    if details.get("source_point") is not None:
+        table.add_row("Source point", str(details.get("source_point")))
+    if preview_path is not None:
+        table.add_row("Preview overlay", str(preview_path))
     if prompt:
         table.add_row("Prompt", prompt)
     if tool_name == "paint_strokes":
@@ -515,6 +537,11 @@ def _run_paint_command(
         table.add_row("Target source", str(details.get("target_source")))
         if details.get("debug_dir"):
             table.add_row("Engine debug", str(details.get("debug_dir")))
+    if tool_name == "clone_stamp":
+        table.add_row("Aligned", str(details.get("aligned")))
+        table.add_row("Spacing", str(details.get("spacing")))
+        table.add_row("Stamp count", str(details.get("stamp_count", 0)))
+        table.add_row("Source rotation", str(details.get("rotation")))
     if tool_name in {"healing_brush", "clone_source_paint"}:
         table.add_row("Blend mode", str(details.get("mode")))
         table.add_row("Source rotation", str(details.get("rotation")))
@@ -619,13 +646,17 @@ def _resolve_paint_tool_name(tool: str) -> str:
         "spot-heal": "spot_healing_brush",
         "spot_heal": "spot_healing_brush",
         "heal": "healing_brush",
-        "clone": "clone_source_paint",
+        "clone": "clone_stamp",
+        "clone-stamp": "clone_stamp",
+        "clone_stamp": "clone_stamp",
+        "clone-source": "clone_source_paint",
+        "clone_source": "clone_source_paint",
         "stroke": "stroke_paint",
         "stroke-engine": "stroke_paint",
         "stroke_engine": "stroke_paint",
     }
     if normalized not in mapping:
-        raise typer.BadParameter("--tool must be one of: paint, spot-heal, heal, clone, stroke, stroke-engine.")
+        raise typer.BadParameter("--tool must be one of: paint, spot-heal, heal, clone, clone-source, stroke, stroke-engine.")
     return mapping[normalized]
 
 
@@ -643,6 +674,7 @@ def _build_paint_payload(
     size: int,
     opacity: float,
     feather: float,
+    spacing: float,
     rotation: float,
     stroke_budget: int,
     candidate_count: int,
@@ -679,11 +711,33 @@ def _build_paint_payload(
             },
             resolved_color,
         )
-    if not source_point:
-        raise typer.BadParameter("--source-point is required for heal and clone tools.")
+    resolved_source_point = source_point
+    if tool_name in {"clone_stamp", "clone_source_paint"} and not resolved_source_point:
+        suggested = _suggest_clone_source_point(image, strokes, size)
+        if suggested is not None:
+            resolved_source_point = f"{suggested[0]},{suggested[1]}"
+    if not resolved_source_point:
+        raise typer.BadParameter("--source-point is required for heal tools and when clone auto-suggestion cannot find a reasonable source.")
+    if tool_name == "clone_stamp":
+        return (
+            {
+                "source_point": list(_parse_xy(resolved_source_point)),
+                "strokes": strokes,
+                "target_points": points,
+                "radius": size,
+                "opacity": opacity,
+                "feather": feather,
+                "rotation": rotation,
+                "flip_horizontal": flip_horizontal,
+                "flip_vertical": flip_vertical,
+                "aligned": True,
+                "spacing": spacing if spacing > 0.0 else max(1.0, size * 0.45),
+            },
+            resolved_color,
+        )
     return (
         {
-            "source_point": list(_parse_xy(source_point)),
+            "source_point": list(_parse_xy(resolved_source_point)),
             "target_points": points,
             "radius": size,
             "opacity": opacity,
@@ -759,6 +813,120 @@ def _sample_rgb(image: Any, x: int, y: int) -> tuple[int, int, int]:
     clipped_y = max(0, min(height - 1, y))
     sample = image[clipped_y, clipped_x]
     return int(sample[0]), int(sample[1]), int(sample[2])
+
+
+def _suggest_clone_source_point(image: Any, strokes: list[dict[str, Any]], size: int) -> tuple[int, int] | None:
+    points = [tuple(map(int, point)) for stroke in strokes for point in stroke.get("points", [])]
+    if not points:
+        return None
+    height, width = image.shape[:2]
+    xs = np.array([point[0] for point in points], dtype=np.int32)
+    ys = np.array([point[1] for point in points], dtype=np.int32)
+    pad = max(8, size * 2)
+    target_x0 = max(0, int(xs.min()) - pad)
+    target_y0 = max(0, int(ys.min()) - pad)
+    target_x1 = min(width, int(xs.max()) + pad + 1)
+    target_y1 = min(height, int(ys.max()) + pad + 1)
+
+    gray = np.dot(image[..., :3], [0.299, 0.587, 0.114]).astype(np.float32)
+    border_mask = np.zeros((height, width), dtype=bool)
+    border_pad = max(10, size * 3)
+    x0 = max(0, target_x0 - border_pad)
+    y0 = max(0, target_y0 - border_pad)
+    x1 = min(width, target_x1 + border_pad)
+    y1 = min(height, target_y1 + border_pad)
+    border_mask[y0:y1, x0:x1] = True
+    border_mask[target_y0:target_y1, target_x0:target_x1] = False
+    if not border_mask.any():
+        return None
+
+    target_mean = float(gray[border_mask].mean())
+    target_std = float(gray[border_mask].std())
+    best_point: tuple[int, int] | None = None
+    best_score = float("inf")
+    search_step = max(6, size)
+    y_start = max(size, y0)
+    y_stop = min(height - size, y1)
+    x_start = max(size, x0)
+    x_stop = min(width - size, x1)
+    white_threshold = max(210.0, target_mean + 35.0)
+
+    for cy in range(y_start, y_stop, search_step):
+        for cx in range(x_start, x_stop, search_step):
+            patch_x0 = cx - size
+            patch_y0 = cy - size
+            patch_x1 = cx + size + 1
+            patch_y1 = cy + size + 1
+            if patch_x0 < 0 or patch_y0 < 0 or patch_x1 > width or patch_y1 > height:
+                continue
+            if not (patch_x1 <= target_x0 or patch_x0 >= target_x1 or patch_y1 <= target_y0 or patch_y0 >= target_y1):
+                continue
+            patch = gray[patch_y0:patch_y1, patch_x0:patch_x1]
+            patch_mean = float(patch.mean())
+            patch_std = float(patch.std())
+            white_ratio = float(np.mean(patch > white_threshold))
+            score = abs(patch_mean - target_mean)
+            score += abs(patch_std - target_std) * 0.6
+            score += white_ratio * 160.0
+            score -= min(patch_std, 20.0) * 0.1
+            distance = float(np.hypot(cx - xs.mean(), cy - ys.mean()))
+            score += distance * 0.02
+            if score < best_score:
+                best_score = score
+                best_point = (cx, cy)
+    return best_point
+
+
+def _save_clone_preview_overlay(image: Any, payload: dict[str, Any], output: Path) -> Path:
+    preview = Image.fromarray(image.astype(np.uint8)).convert("RGBA")
+    overlay = Image.new("RGBA", preview.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+
+    source_point = payload.get("source_point")
+    target_points = [tuple(point) for point in payload.get("target_points", []) if isinstance(point, list) and len(point) == 2]
+    strokes = payload.get("strokes", [])
+    radius = int(payload.get("radius", 8))
+    if strokes:
+        for stroke in strokes:
+            points = [tuple(point) for point in stroke.get("points", []) if isinstance(point, list) and len(point) == 2]
+            if len(points) >= 2:
+                draw.line(points, fill=(255, 80, 80, 220), width=max(2, radius // 3))
+            for point in points:
+                _draw_cross(draw, point, radius=max(3, radius // 3), color=(255, 80, 80, 220))
+    elif target_points:
+        for point in target_points:
+            _draw_circle(draw, point, radius=max(3, radius // 3), outline=(255, 80, 80, 220), fill=(255, 80, 80, 80))
+
+    if isinstance(source_point, list) and len(source_point) == 2:
+        source_xy = (int(source_point[0]), int(source_point[1]))
+        _draw_cross(draw, source_xy, radius=max(5, radius // 2), color=(80, 200, 255, 240))
+        if target_points and payload.get("aligned", False):
+            offset = (source_xy[0] - int(target_points[0][0]), source_xy[1] - int(target_points[0][1]))
+            aligned_path = [(int(point[0] + offset[0]), int(point[1] + offset[1])) for point in target_points]
+            if len(aligned_path) >= 2:
+                draw.line(aligned_path, fill=(80, 200, 255, 160), width=max(2, radius // 4))
+
+    preview_path = output.with_name(f"{output.stem}_preview{output.suffix}")
+    merged = Image.alpha_composite(preview, overlay).convert("RGB")
+    save_image(np.asarray(merged).astype(np.uint8), preview_path)
+    return preview_path
+
+
+def _draw_cross(draw: ImageDraw.ImageDraw, point: tuple[int, int], radius: int, color: tuple[int, int, int, int]) -> None:
+    x, y = point
+    draw.line([(x - radius, y), (x + radius, y)], fill=color, width=2)
+    draw.line([(x, y - radius), (x, y + radius)], fill=color, width=2)
+
+
+def _draw_circle(
+    draw: ImageDraw.ImageDraw,
+    point: tuple[int, int],
+    radius: int,
+    outline: tuple[int, int, int, int],
+    fill: tuple[int, int, int, int],
+) -> None:
+    x, y = point
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), outline=outline, fill=fill, width=2)
 
 
 if __name__ == "__main__":

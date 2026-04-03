@@ -24,6 +24,7 @@ class ReviewerAgent:
         record_node_event(state, node="review_result", phase="start")
         review = self._review_with_gemini(state) or self._heuristic_review(state)
         state["review"] = review.model_dump()
+        state.setdefault("review_history", []).append({"iteration": state["iteration"], **review.model_dump()})
         record_agent_handoff(
             state,
             from_agent="reviewer",
