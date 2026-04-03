@@ -7,11 +7,12 @@ By default, each run is stored in its own folder under `/tmp/veriedit/<run_id>`.
 ## Highlights
 
 - Explicit image editing tools only
-- LangGraph workflow with policy, diagnostics, planning, execution, review, and retry
+- AG2 multi-agent runtime with policy, diagnostics, planning, execution, review, and retry
 - Optional Gemini-assisted planning and review with deterministic fallbacks
 - Interactive REPL shell and scriptable CLI under one `veriedit` entrypoint
 - Manual paint/brush tool for localized touch-up with soft, round, and square pens
 - Photoshop-style local repair tools including spot healing, healing brush, clone-style source painting, and masked curves adjustment
+- Closed-loop stroke engine for localized repair-oriented stroke planning
 - JSON and Markdown reports plus intermediate artifacts
 
 ## Quick start
@@ -40,6 +41,17 @@ veriedit edit \
   --output-folder /path/to/my-runs
 ```
 
+If you want to debug a single tool or a very small tool set, you can restrict what the workflow is allowed to use:
+
+```bash
+veriedit edit \
+  --input input.jpg \
+  --prompt "Repair the damaged region naturally with local retouching." \
+  --allow-tool stroke_paint
+```
+
+Repeat `--allow-tool` to allow multiple tools. If you omit it, all workflow tools remain available.
+
 For manual brush-based touch-up:
 
 ```bash
@@ -66,6 +78,29 @@ veriedit paint \
   --feather 3
 ```
 
+Closed-loop stroke-engine repair example:
+
+```bash
+veriedit paint \
+  --tool stroke-engine \
+  --input input.jpg \
+  --reference reference.jpg \
+  --prompt "Repair scratches naturally with short corrective strokes." \
+  --output output/stroke_result.png \
+  --mask-box "180,110,140,120" \
+  --stroke-budget 12 \
+  --candidate-count 12 \
+  --size 8 \
+  --opacity 0.65
+```
+
+## Workflow Notes
+
+- `veriedit edit` creates a run folder and stores the final image plus reports there.
+- `--output-folder` controls the parent folder for run directories, not the exact output filename.
+- `--allow-tool` is mainly for debugging and evaluation, especially when you want to isolate one tool’s behavior.
+- `veriedit graph` reports whether the AG2 runtime layer is active.
+
 ## Python API
 
 ```python
@@ -75,5 +110,6 @@ result = edit_image(
     source_image="input.jpg",
     prompt="Restore this scan naturally and keep it realistic.",
     reference_image="reference.jpg",
+    allowed_tools=["stroke_paint"],
 )
 ```

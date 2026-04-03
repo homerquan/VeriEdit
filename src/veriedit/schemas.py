@@ -11,6 +11,7 @@ class EditRequest(BaseModel):
     prompt: str
     reference_image: str | None = None
     output_path: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = Field(default=3, ge=1, le=10)
     preserve_metadata: bool = False
     save_intermediates: bool = True
@@ -67,12 +68,31 @@ class PlanStep(BaseModel):
     reason: str
 
 
+class ToolRecommendation(BaseModel):
+    tool: str
+    score: float = Field(ge=0.0)
+    rationale: str
+    priority: Literal["primary", "secondary", "fallback"] = "secondary"
+    params_hint: dict[str, Any] = Field(default_factory=dict)
+    mode_hint: Literal["global", "masked_local_repair", "reference_guided", "manual"] = "global"
+
+
 class EditPlan(BaseModel):
     objective: str
     must_preserve: list[str] = Field(default_factory=list)
     must_avoid: list[str] = Field(default_factory=list)
     steps: list[PlanStep] = Field(default_factory=list)
     acceptance: list[str] = Field(default_factory=list)
+    recommended_tools: list[ToolRecommendation] = Field(default_factory=list)
+
+
+class AgentHandoff(BaseModel):
+    from_agent: str
+    to_agent: str
+    iteration: int
+    summary: str
+    key_points: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExecutionRecord(BaseModel):
@@ -180,6 +200,7 @@ class WorkflowState(TypedDict):
     style_profile: dict[str, Any] | None
     plan: dict[str, Any] | None
     executed_steps: list[dict[str, Any]]
+    agent_handoffs: list[dict[str, Any]]
     observation_trace: list[dict[str, Any]]
     intermediate_paths: list[str]
     review: dict[str, Any] | None

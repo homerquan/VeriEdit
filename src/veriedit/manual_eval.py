@@ -182,6 +182,10 @@ def _render_markdown(
                 lines.append(
                     f"- node `{event['node']}` {event['phase']} iteration {event['iteration']} summary=`{json.dumps(event.get('summary', {}), sort_keys=True)}`"
                 )
+            elif event.get("kind") == "handoff":
+                lines.append(
+                    f"- handoff `{event['from_agent']}` -> `{event['to_agent']}` summary=`{event.get('summary', '')}` payload=`{json.dumps(event.get('payload', {}), sort_keys=True)}`"
+                )
             else:
                 lines.append(
                     f"- tool `{event['tool']}` variant `{event['variant']}` status `{event['status']}` params=`{json.dumps(event.get('params', {}), sort_keys=True)}` metrics=`{json.dumps(event.get('metrics', {}), sort_keys=True)}`"

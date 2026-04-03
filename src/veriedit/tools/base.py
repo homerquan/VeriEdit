@@ -15,6 +15,8 @@ class ToolSpec(BaseModel):
     description: str
     input_schema: dict[str, Any]
     safety_notes: list[str]
+    edit_scope: str = "global"
+    capability_tags: list[str] = Field(default_factory=list)
     parameter_bounds: dict[str, tuple[float, float] | tuple[int, int] | list[str]] = Field(default_factory=dict)
     expected_effect: str
     likely_failure_modes: list[str] = Field(default_factory=list)

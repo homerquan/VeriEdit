@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from veriedit.io.writer import append_jsonl
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, PolicyStatus, WorkflowState
 
 REJECT_PATTERNS = [
@@ -60,6 +60,18 @@ class PolicyAgent:
         )
         state["policy_status"] = policy.model_dump()
         state["stop_reason"] = reason if status == "reject" else None
+        record_agent_handoff(
+            state,
+            from_agent="policy",
+            to_agent="finalizer" if status == "reject" else "diagnostics",
+            summary=f"Policy classified the request as {status}.",
+            key_points=[
+                f"risk_level={risk_level}",
+                f"warnings={len(warnings)}",
+                f"constraints={len(policy.constraints)}",
+            ],
+            payload=policy.model_dump(),
+        )
         self._log(
             state,
             AgentLog(

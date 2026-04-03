@@ -4,7 +4,7 @@ import time
 
 from veriedit.config import WorkflowConfig
 from veriedit.io.writer import append_jsonl
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, RetryDecision, WorkflowState
 
 
@@ -40,6 +40,14 @@ class RetryAgent:
         state["retry_decision"] = decision.model_dump()
         if decision.decision != "retry":
             state["stop_reason"] = decision.reason
+        record_agent_handoff(
+            state,
+            from_agent="retry",
+            to_agent="planner" if decision.decision == "retry" else "finalizer",
+            summary=f"Retry agent decided to {decision.decision}.",
+            key_points=[decision.reason] + ([decision.strategy] if decision.strategy else []),
+            payload=decision.model_dump(),
+        )
         self._log(
             state,
             AgentLog(

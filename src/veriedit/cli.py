@@ -23,6 +23,7 @@ from veriedit.io.loader import load_image
 from veriedit.io.writer import save_image
 from veriedit.manual_eval import build_manual_eval_from_run, build_manual_eval_markdown
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
+from veriedit.runtime import has_ag2_runtime
 from veriedit.schemas import EditRequest
 from veriedit.tools import build_tool_registry
 from veriedit.workflow import VeriEditWorkflow
@@ -60,6 +61,7 @@ def edit(
     prompt: str = typer.Option(..., "--prompt", help="Natural-language editing prompt."),
     reference: Optional[Path] = typer.Option(None, "--reference", exists=True, readable=True, help="Optional reference image."),
     output_folder: Optional[Path] = typer.Option(None, "--output-folder", file_okay=False, help="Folder where run directories should be created."),
+    allow_tool: list[str] = typer.Option([], "--allow-tool", help="Restrict the workflow to specific tool names. Repeat to allow multiple tools."),
     max_iterations: int = typer.Option(3, "--max-iterations", min=1, max=10),
     save_intermediates: bool = typer.Option(True, "--save-intermediates/--no-save-intermediates"),
     enable_human_approval: bool = typer.Option(True, "--human-approval/--no-human-approval"),
@@ -69,6 +71,7 @@ def edit(
         prompt=prompt,
         reference=reference,
         output_folder=output_folder,
+        allowed_tools=allow_tool,
         max_iterations=max_iterations,
         save_intermediates=save_intermediates,
         enable_human_approval=enable_human_approval,
@@ -174,7 +177,12 @@ def report(
 @app.command()
 def graph() -> None:
     workflow = VeriEditWorkflow()
-    console.print("LangGraph available." if workflow.graph is not None else "LangGraph dependency unavailable; fallback loop is active.")
+    if workflow.runtime is not None:
+        console.print("AG2 runtime active.")
+    elif has_ag2_runtime():
+        console.print("AG2 is installed but the workflow fell back to the local loop.")
+    else:
+        console.print("AG2 dependency unavailable; local fallback loop is active.")
 
 
 @app.command()
@@ -292,7 +300,7 @@ def _print_shell_help() -> None:
     table.add_row("report --run-id <id>", "Print a run report as JSON.")
     table.add_row("manual-eval ...", "Generate a self-contained markdown review sheet.")
     table.add_row("manual-approve ...", "Record a human approval or rejection for a run.")
-    table.add_row("graph", "Show whether LangGraph is active.")
+    table.add_row("graph", "Show whether the AG2 runtime layer is active.")
     table.add_row("quit", "Exit the shell.")
     console.print(table)
 
@@ -304,11 +312,17 @@ def _interactive_edit_wizard() -> None:
     output_folder_raw = Prompt.ask("Output folder (optional, default /tmp/veriedit)", default="", show_default=False).strip()
     max_iterations = IntPrompt.ask("Max iterations", default=3)
     enable_human_approval = Confirm.ask("Enable human approval for ambiguous results?", default=True)
+    allowed_tools_raw = Prompt.ask(
+        "Allowed tools (optional, comma-separated tool names; blank means all)",
+        default="",
+        show_default=False,
+    ).strip()
     _run_edit_command(
         input=input_path,
         prompt=prompt,
         reference=Path(reference_raw).expanduser() if reference_raw else None,
         output_folder=Path(output_folder_raw).expanduser() if output_folder_raw else None,
+        allowed_tools=[item.strip() for item in allowed_tools_raw.split(",") if item.strip()],
         max_iterations=max_iterations,
         save_intermediates=True,
         enable_human_approval=enable_human_approval,
@@ -394,10 +408,12 @@ def _run_edit_command(
     prompt: str,
     reference: Optional[Path],
     output_folder: Optional[Path],
+    allowed_tools: list[str],
     max_iterations: int,
     save_intermediates: bool,
     enable_human_approval: bool,
 ) -> None:
+    normalized_allowed_tools = _validate_allowed_tools(allowed_tools)
     workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=output_folder or WorkflowConfig().artifact_root))
     result = _run_with_spinner(
         label=f"Editing {input.name}",
@@ -408,6 +424,7 @@ def _run_edit_command(
                 prompt=prompt,
                 reference_image=str(reference) if reference else None,
                 output_path=None,
+                allowed_tools=normalized_allowed_tools,
                 max_iterations=max_iterations,
                 save_intermediates=save_intermediates,
                 enable_human_approval=enable_human_approval,
@@ -514,6 +531,27 @@ def _run_inspect_command(input: Path) -> None:
     for key, value in {**summary, **{f"style_{k}": v for k, v in style.items()}}.items():
         table.add_row(str(key), f"{value}")
     console.print(table)
+
+
+def _validate_allowed_tools(allowed_tools: list[str]) -> list[str]:
+    if not allowed_tools:
+        return []
+    registry = build_tool_registry()
+    known = set(registry.names())
+    normalized: list[str] = []
+    unknown: list[str] = []
+    for name in allowed_tools:
+        item = name.strip()
+        if not item:
+            continue
+        if item not in known:
+            unknown.append(item)
+            continue
+        if item not in normalized:
+            normalized.append(item)
+    if unknown:
+        raise typer.BadParameter(f"Unknown tool(s): {', '.join(unknown)}")
+    return normalized
 
 
 def _print_result_summary(result: Any) -> None:

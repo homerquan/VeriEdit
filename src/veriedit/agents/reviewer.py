@@ -11,7 +11,7 @@ from veriedit.io.writer import append_jsonl
 from veriedit.llm import GeminiStructuredClient, has_gemini_support
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
 from veriedit.metrics.similarity import compare_images
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, ReviewResult, WorkflowState
 
 
@@ -24,6 +24,14 @@ class ReviewerAgent:
         record_node_event(state, node="review_result", phase="start")
         review = self._review_with_gemini(state) or self._heuristic_review(state)
         state["review"] = review.model_dump()
+        record_agent_handoff(
+            state,
+            from_agent="reviewer",
+            to_agent="human_approval",
+            summary=f"Review returned {review.status} with prompt_score={review.prompt_score:.3f} and artifact_risk={review.artifact_risk:.3f}.",
+            key_points=review.findings[:4],
+            payload=review.model_dump(),
+        )
         self._log(
             state,
             AgentLog(

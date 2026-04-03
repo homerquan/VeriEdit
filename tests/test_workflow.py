@@ -56,6 +56,9 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
     assert "diagnostic_artifacts" in payload
     assert payload["diagnostic_artifacts"].get("regions_board")
     assert Path(payload["diagnostic_artifacts"]["regions_board"]).exists()
+    assert "recommended_tools" in (payload["plan"] or {})
+    assert payload.get("agent_handoffs")
+    assert any(handoff["from_agent"] == "planner" and handoff["to_agent"] == "executor" for handoff in payload["agent_handoffs"])
     assert any("Variant selected:" in note for step in payload["executed_steps"] for note in step["notes"])
     assert "## Images" in report_md
     assert "## Step Snapshots" in report_md
@@ -71,6 +74,7 @@ def test_workflow_runs_end_to_end(tmp_path: Path) -> None:
             assert step["after_metrics"].get("preserved_region_change_ratio", 0.0) <= 0.08
     observation = json.loads(Path(result.observation_json).read_text(encoding="utf-8"))
     assert any(event["kind"] == "node" for event in observation["trace"])
+    assert any(event["kind"] == "handoff" for event in observation["trace"])
     assert any(event["kind"] == "tool" for event in observation["trace"])
 
 
@@ -97,3 +101,28 @@ def test_workflow_can_plan_and_execute_stroke_paint(tmp_path: Path) -> None:
     stroke_step = next(step for step in payload["executed_steps"] if step["tool"] == "stroke_paint")
     assert stroke_step["execution_mode"] == "masked_local_repair"
     assert stroke_step["mask_name"] == "stroke_roi"
+
+
+def test_workflow_respects_allowed_tools_filter(tmp_path: Path) -> None:
+    source = np.full((96, 96, 3), 140, dtype=np.uint8)
+    source[30:38, 28:70] = 245
+    source[40:45, 40:48] = 20
+    source_path = tmp_path / "source.png"
+    _save_fixture(source_path, source)
+    workflow = VeriEditWorkflow(config=WorkflowConfig(artifact_root=tmp_path / "runs"))
+    result = workflow.run(
+        EditRequest(
+            source_image=str(source_path),
+            prompt="Repair the damaged region naturally with local retouching.",
+            allowed_tools=["stroke_paint"],
+            max_iterations=1,
+            save_intermediates=True,
+            enable_human_approval=False,
+        )
+    )
+    assert result.report_json is not None
+    payload = json.loads(Path(result.report_json).read_text(encoding="utf-8"))
+    tools = [step["tool"] for step in payload["executed_steps"]]
+    assert tools
+    assert set(tools) == {"stroke_paint"}
+    assert payload["request"]["allowed_tools"] == ["stroke_paint"]

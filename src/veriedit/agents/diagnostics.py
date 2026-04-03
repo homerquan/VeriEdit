@@ -8,7 +8,7 @@ from veriedit.io.loader import load_image
 from veriedit.io.writer import append_jsonl
 from veriedit.metrics.iq_metrics import style_profile_from_image, summarize_image_quality
 from veriedit.metrics.regions import defect_masks, region_summary, save_mask_artifacts
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, DiagnosticsBundle, SourceDiagnostics, StyleProfile, WorkflowState
 
 
@@ -34,6 +34,18 @@ class DiagnosticsAgent:
         )
         state["diagnostics"] = diagnostics.model_dump()
         state["diagnostic_artifacts"] = artifacts
+        record_agent_handoff(
+            state,
+            from_agent="diagnostics",
+            to_agent="planner",
+            summary="Diagnostics summarized source quality and localized likely defect regions.",
+            key_points=[
+                f"dust={source_summary['dust_candidates']}",
+                f"scratch={source_summary['scratch_candidates']}",
+                f"largest_defect_ratio={regions.get('largest_defect_ratio', 0.0)}",
+            ],
+            payload={"source": diagnostics.source.model_dump(), "regions": regions, "reference": reference_profile or {}},
+        )
         self._log(
             state,
             AgentLog(

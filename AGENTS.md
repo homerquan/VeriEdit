@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the multi-agent architecture for a **non-generative image editing system** built with **LangGraph**.
+This document defines the multi-agent architecture for a **non-generative image editing system** built around an **AG2 multi-agent runtime**.
 
 The agents coordinate:
 - planning
@@ -55,7 +55,7 @@ No agent may call a generative image model.
 
 ## 4. Shared State Schema
 
-All agents read/write a common LangGraph state.
+All agents read/write a common workflow state, while the runtime layer coordinates turns and handoffs through AG2.
 
 ```python
 class WorkflowState(TypedDict):
@@ -402,7 +402,7 @@ It may not influence:
 
 ---
 
-## 7. LangGraph Node Design
+## 7. Runtime Flow Design
 
 Suggested node list:
 - `policy_check`

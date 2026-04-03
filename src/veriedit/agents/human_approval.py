@@ -5,7 +5,7 @@ import time
 from veriedit.config import WorkflowConfig
 from veriedit.human_review import human_approval_path, load_human_approval
 from veriedit.io.writer import append_jsonl
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, HumanReviewRequest, WorkflowState
 
 
@@ -32,6 +32,14 @@ class HumanApprovalAgent:
         else:
             human_review = _decide_human_review(review, state, self.config)
         state["human_review"] = human_review.model_dump()
+        record_agent_handoff(
+            state,
+            from_agent="human_approval",
+            to_agent="retry",
+            summary=f"Human approval gate resolved to {human_review.status}.",
+            key_points=human_review.reasons[:3] or ([human_review.reason] if human_review.reason else []),
+            payload=human_review.model_dump(),
+        )
         self._log(
             state,
             AgentLog(

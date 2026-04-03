@@ -9,7 +9,7 @@ from veriedit.io.loader import load_image
 from veriedit.io.writer import append_jsonl, save_image
 from veriedit.metrics.iq_metrics import summarize_image_quality
 from veriedit.metrics.similarity import compare_images
-from veriedit.observability import record_node_event, record_tool_event
+from veriedit.observability import record_agent_handoff, record_node_event, record_tool_event
 from veriedit.schemas import AgentLog, ExecutionRecord, WorkflowState
 from veriedit.tools import build_tool_registry
 from veriedit.tools.base import sanitize_numeric_params
@@ -28,9 +28,27 @@ class ExecutorAgent:
         step_records: list[dict] = []
         intermediate_paths = list(state["intermediate_paths"])
         save_intermediates = bool(state["request"].get("save_intermediates", True))
+        allowed_tools = set(state["request"].get("allowed_tools") or self.registry.names())
         latest_output_path = state["current_image_path"]
         mask_cache = _load_execution_masks(state)
         for index, raw_step in enumerate(plan.get("steps", []), start=1):
+            if raw_step["tool"] not in allowed_tools:
+                output_path = Path(state["run_dir"]) / f"step_{state['iteration']:02d}_{index:02d}_{raw_step['tool']}_blocked.png"
+                record = ExecutionRecord(
+                    step_index=index,
+                    tool=raw_step["tool"],
+                    params=raw_step.get("params", {}),
+                    execution_mode="blocked",
+                    mask_name=None,
+                    mask_coverage=0.0,
+                    before_metrics={},
+                    after_metrics={},
+                    output_path=str(output_path),
+                    status="failed",
+                    notes=["Step skipped because the tool is not in the allowed-tools list."],
+                )
+                step_records.append(record.model_dump())
+                continue
             spec = self.registry.get(raw_step["tool"])
             params = sanitize_numeric_params(raw_step.get("params", {}), spec.parameter_bounds)
             before_metrics = summarize_image_quality(current_image, metadata)
@@ -102,6 +120,18 @@ class ExecutorAgent:
         state["executed_steps"].extend(step_records)
         state["intermediate_paths"] = intermediate_paths
         state["current_image_path"] = latest_output_path
+        record_agent_handoff(
+            state,
+            from_agent="executor",
+            to_agent="reviewer",
+            summary=f"Executed {len(step_records)} planned step(s) and updated the working image.",
+            key_points=[
+                f"rolled_back={sum(1 for step in step_records if step['status'] == 'rolled_back')}",
+                f"ok={sum(1 for step in step_records if step['status'] == 'ok')}",
+                f"latest_image={Path(latest_output_path).name}",
+            ],
+            payload={"executed_steps": step_records[-6:], "current_image_path": latest_output_path},
+        )
         self._log(
             state,
             AgentLog(

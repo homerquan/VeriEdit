@@ -2,20 +2,14 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Literal
 
 from veriedit.agents import DiagnosticsAgent, ExecutorAgent, HumanApprovalAgent, PlannerAgent, RetryAgent, ReviewerAgent
 from veriedit.config import WorkflowConfig
 from veriedit.io.writer import ensure_run_artifacts
 from veriedit.policy import PolicyAgent
 from veriedit.reports.report_builder import finalize_outputs
+from veriedit.runtime import AG2WorkflowRuntime, has_ag2_runtime
 from veriedit.schemas import EditRequest, FinalResult, WorkflowState
-
-try:
-    from langgraph.graph import END, StateGraph  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - dependency/runtime dependent
-    END = "__end__"
-    StateGraph = None
 
 
 class VeriEditWorkflow:
@@ -28,7 +22,21 @@ class VeriEditWorkflow:
         self.reviewer_agent = ReviewerAgent(model=self.config.default_llm_model)
         self.human_approval_agent = HumanApprovalAgent(config=self.config)
         self.retry_agent = RetryAgent(config=self.config)
-        self.graph = self._build_graph() if StateGraph is not None else None
+        self.runtime = (
+            AG2WorkflowRuntime(
+                policy_agent=self.policy_agent,
+                diagnostics_agent=self.diagnostics_agent,
+                planner_agent=self.planner_agent,
+                executor_agent=self.executor_agent,
+                reviewer_agent=self.reviewer_agent,
+                human_approval_agent=self.human_approval_agent,
+                retry_agent=self.retry_agent,
+                finalize_state=self._finalize_state,
+            )
+            if has_ag2_runtime()
+            else None
+        )
+        self.graph = None
 
     def run(self, request: EditRequest):
         artifacts = ensure_run_artifacts(
@@ -52,6 +60,7 @@ class VeriEditWorkflow:
             "style_profile": None,
             "plan": None,
             "executed_steps": [],
+            "agent_handoffs": [],
             "observation_trace": [],
             "intermediate_paths": [],
             "review": None,
@@ -63,42 +72,13 @@ class VeriEditWorkflow:
             "max_iterations": request.max_iterations,
             "stop_reason": None,
         }
-        if self.graph is not None:
-            state = self.graph.invoke(state)
+        if self.runtime is not None:
+            state = self.runtime.run(state)
         else:
-            state = self._run_without_langgraph(state)
+            state = self._run_without_runtime(state)
         return finalize_outputs(state)
 
-    def _build_graph(self):
-        graph = StateGraph(WorkflowState)
-        graph.add_node("policy_check", self.policy_agent.run)
-        graph.add_node("diagnose_inputs", self.diagnostics_agent.run)
-        graph.add_node("plan_edits", self.planner_agent.run)
-        graph.add_node("execute_plan", self.executor_agent.run)
-        graph.add_node("review_result", self.reviewer_agent.run)
-        graph.add_node("human_approval_gate", self.human_approval_agent.run)
-        graph.add_node("decide_retry", self.retry_agent.run)
-        graph.add_node("finalize_report", self._finalize_state)
-        graph.set_entry_point("policy_check")
-        graph.add_conditional_edges(
-            "policy_check",
-            self._route_policy,
-            {"reject": "finalize_report", "allow": "diagnose_inputs"},
-        )
-        graph.add_edge("diagnose_inputs", "plan_edits")
-        graph.add_edge("plan_edits", "execute_plan")
-        graph.add_edge("execute_plan", "review_result")
-        graph.add_edge("review_result", "human_approval_gate")
-        graph.add_edge("human_approval_gate", "decide_retry")
-        graph.add_conditional_edges(
-            "decide_retry",
-            self._route_retry,
-            {"accept": "finalize_report", "retry": "plan_edits", "stop": "finalize_report"},
-        )
-        graph.add_edge("finalize_report", END)
-        return graph.compile()
-
-    def _run_without_langgraph(self, state: WorkflowState) -> WorkflowState:
+    def _run_without_runtime(self, state: WorkflowState) -> WorkflowState:
         state = self.policy_agent.run(state)
         if state["policy_status"].get("status") == "reject":
             return self._finalize_state(state)
@@ -113,15 +93,6 @@ class VeriEditWorkflow:
             if decision != "retry":
                 return self._finalize_state(state)
             state["iteration"] += 1
-
-    def _route_policy(self, state: WorkflowState) -> Literal["allow", "reject"]:
-        return "reject" if state["policy_status"].get("status") == "reject" else "allow"
-
-    def _route_retry(self, state: WorkflowState) -> Literal["accept", "retry", "stop"]:
-        decision = (state["retry_decision"] or {}).get("decision", "stop")
-        if decision == "retry":
-            state["iteration"] += 1
-        return decision
 
     def _finalize_state(self, state: WorkflowState) -> WorkflowState:
         review = state["review"] or {}

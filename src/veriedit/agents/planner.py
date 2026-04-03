@@ -7,9 +7,10 @@ from pydantic import ValidationError
 
 from veriedit.io.writer import append_jsonl
 from veriedit.llm import GeminiStructuredClient, has_gemini_support
-from veriedit.observability import record_node_event
+from veriedit.observability import record_agent_handoff, record_node_event
 from veriedit.schemas import AgentLog, EditPlan, PlanStep, WorkflowState
 from veriedit.tools import build_tool_registry
+from veriedit.tools.selector import rank_tools
 
 
 class PlannerAgent:
@@ -22,6 +23,22 @@ class PlannerAgent:
         record_node_event(state, node="plan_edits", phase="start")
         plan = self._plan_with_gemini(state) or self._heuristic_plan(state)
         state["plan"] = plan.model_dump()
+        record_agent_handoff(
+            state,
+            from_agent="planner",
+            to_agent="executor",
+            summary=f"Planned {len(plan.steps)} steps toward '{plan.objective}'.",
+            key_points=[
+                f"must_preserve={', '.join(plan.must_preserve[:3]) or 'n/a'}",
+                f"must_avoid={', '.join(plan.must_avoid[:3]) or 'n/a'}",
+                f"top_tools={', '.join(step.tool for step in plan.steps[:4]) or 'none'}",
+            ],
+            payload={
+                "objective": plan.objective,
+                "steps": [step.model_dump() for step in plan.steps],
+                "recommended_tools": [item.model_dump() for item in plan.recommended_tools[:5]],
+            },
+        )
         self._log(
             state,
             AgentLog(
@@ -56,7 +73,11 @@ class PlannerAgent:
             "policy_constraints": state["policy_status"].get("constraints", []),
             "diagnostics": state["diagnostics"],
             "style_profile": state["style_profile"],
-            "tool_registry": [spec.model_dump(exclude={"operation"}) for spec in self.registry.specs()],
+            "tool_registry": [
+                spec.model_dump(exclude={"operation"})
+                for spec in self.registry.specs()
+                if spec.name in _allowed_or_all_tools(state, self.registry.names())
+            ],
             "retry_context": state.get("retry_decision"),
         }
         try:  # pragma: no cover - depends on external API
@@ -70,7 +91,18 @@ class PlannerAgent:
         prompt = state["prompt"].lower()
         retry = state.get("retry_decision") or {}
         blocked_tools = _blocked_tools_from_history(state["executed_steps"])
+        allowed_tools = _allowed_or_all_tools(state, self.registry.names())
+        blocked_tools |= {tool for tool in self.registry.names() if tool not in allowed_tools}
         region_summary = state["diagnostics"].get("regions", {})
+        recommendations = rank_tools(
+            registry=self.registry,
+            prompt=prompt,
+            diagnostics=state["diagnostics"],
+            region_summary=region_summary,
+            retry_context=retry,
+            blocked_tools=blocked_tools,
+            has_reference=bool(state["reference_image_path"]),
+        )
         steps: list[PlanStep] = []
         acceptance: list[str] = []
         must_avoid = ["oversmoothing", "halo artifacts", "semantic content changes"]
@@ -79,126 +111,22 @@ class PlannerAgent:
         if should_deskew and plausible_skew:
             steps.append(PlanStep(tool="deskew", params={"angle": diagnostics["skew_angle"]}, reason="Correct noticeable skew"))
             acceptance.append("skew reduced")
-        if "yellow" in prompt or "white balance" in prompt or diagnostics["yellow_cast"] > 0.58:
-            steps.append(
-                PlanStep(
-                    tool="auto_white_balance",
-                    params={"strength": 0.7 if "natural" not in prompt else 0.55},
-                    reason="Reduce color cast conservatively",
-                )
-            )
-            acceptance.append("yellow cast reduced")
-        if "faded" in prompt or "contrast" in prompt or diagnostics["contrast_score"] < 0.52 or diagnostics["fade_score"] > 0.42:
-            if "shadow_highlight_balance" not in blocked_tools:
-                steps.append(
-                    PlanStep(
-                        tool="shadow_highlight_balance",
-                        params={"shadow_lift": 0.16, "highlight_compress": 0.1, "blur_sigma": 16.0},
-                        reason="Recover faded tonal separation without aggressive clipping",
-                    )
-                )
-            steps.append(PlanStep(tool="clahe_contrast", params={"clip_limit": 1.8}, reason="Gently restore local contrast"))
-            acceptance.append("contrast improved without clipping")
-        if "dust" in prompt or "speck" in prompt or diagnostics["dust_candidates"] > 24:
-            steps.append(
-                PlanStep(
-                    tool="dust_cleanup",
-                    params={"max_area": 20, "sensitivity": 0.45},
-                    reason="Remove isolated scan dust and speckles",
-                )
-            )
-            acceptance.append("dust visibly reduced")
-        if "scratch" in prompt or diagnostics["dust_candidates"] > 80 or diagnostics["scratch_candidates"] > 12:
-            steps.append(
-                PlanStep(
-                    tool="scratch_candidate_cleanup",
-                    params={"max_area": 72, "sensitivity": 0.35},
-                    reason="Reduce small scratch-like artifacts where safe",
-                )
-            )
-        if (
-            diagnostics["dust_candidates"] > 180
-            or diagnostics["scratch_candidates"] > 20
-            or diagnostics["edge_damage_ratio"] > 0.08
-            or float(region_summary.get("largest_defect_ratio", 0.0)) < 0.2
-        ):
-            if "small_defect_heal" not in blocked_tools:
-                steps.append(
-                    PlanStep(
-                        tool="small_defect_heal",
-                        params={"max_area": 28, "sensitivity": 0.4, "radius": 2.0},
-                        reason="Use local healing for small detected defect regions after coarse cleanup",
-                    )
-                )
-        if _should_use_stroke_paint(prompt, diagnostics, region_summary, blocked_tools):
-            boxes = _stroke_paint_boxes(region_summary)
-            if boxes:
-                steps.append(
-                    PlanStep(
-                        tool="stroke_paint",
-                        params={
-                            "mask_boxes": boxes,
-                            "stroke_budget": 10 if "natural" in prompt else 14,
-                            "candidate_count": 14,
-                            "min_size": 3,
-                            "max_size": 10,
-                            "opacity": 0.5 if "natural" in prompt else 0.62,
-                            "pen": "soft",
-                        },
-                        reason="Use iterative local repair strokes on the most concentrated damaged regions",
-                    )
-                )
-                acceptance.append("localized damaged regions repaired without broad overpaint")
-        if "noise" in prompt or "grain" in prompt or diagnostics["noise_score"] > 0.08:
-            if "non_local_means_denoise" in blocked_tools and "bilateral_denoise" not in blocked_tools:
-                steps.append(
-                    PlanStep(
-                        tool="bilateral_denoise",
-                        params={"diameter": 7, "sigma_color": 24.0, "sigma_space": 7.0},
-                        reason="Use a gentler edge-preserving denoise after prior rollback",
-                    )
-                )
-            else:
-                steps.append(
-                    PlanStep(
-                        tool="non_local_means_denoise",
-                        params={"h": 5.0 if "natural" in prompt else 6.0},
-                        reason="Reduce visible scan or sensor noise",
-                    )
-                )
-            acceptance.append("noise reduced while retaining texture")
-        if state["reference_image_path"]:
-            steps.append(
-                PlanStep(
-                    tool="bounded_histogram_match_to_reference",
-                    params={"strength": 0.28},
-                    reason="Bias tonal feel toward the reference without copying content",
-                )
-            )
-            steps.append(
-                PlanStep(
-                    tool="texture_softness_bias_from_reference",
-                    params={},
-                    reason="Match the reference softness or crispness feel at a low level",
-                )
-            )
-            acceptance.append("reference style reflected only in tone and texture")
-        sharpen_requested = any(word in prompt for word in ("sharp", "clarity", "detail"))
-        if sharpen_requested or ("blur" in prompt and diagnostics["blur_score"] < 120):
-            amount = 0.25 if "natural" in prompt else 0.35
-            if retry.get("strategy") and "reduce sharpen" in retry["strategy"].lower():
-                amount *= 0.7
-            steps.append(
-                PlanStep(
-                    tool="unsharp_mask",
-                    params={"radius": 1.0, "amount": round(amount, 2)},
-                    reason="Add light sharpening after cleanup",
-                )
-            )
-            acceptance.append("detail remains natural")
+        for recommendation in recommendations:
+            candidate = _step_from_recommendation(recommendation, state, region_summary, blocked_tools)
+            if candidate is None:
+                continue
+            if recommendation.score < 1.0:
+                continue
+            if any(step.tool == candidate.tool for step in steps):
+                continue
+            steps.append(candidate)
+            acceptance.extend(_acceptance_for_tool(candidate.tool))
+            if len(steps) >= 6:
+                break
         if not steps:
             steps.append(PlanStep(tool="histogram_balance", params={"strength": 0.4}, reason="Apply a safe baseline tonal normalization"))
             acceptance.append("overall balance improved naturally")
+        steps = _ordered_unique_steps(steps)
         objective = _objective_from_prompt(prompt)
         if retry.get("strategy") and "reduce denoise" in retry["strategy"].lower():
             steps = [
@@ -215,6 +143,7 @@ class PlannerAgent:
             must_avoid=must_avoid,
             steps=steps,
             acceptance=list(dict.fromkeys(acceptance)) or ["result stays realistic"],
+            recommended_tools=recommendations,
         )
 
     def _log(self, state: WorkflowState, record: AgentLog) -> None:
@@ -241,6 +170,13 @@ def _blocked_tools_from_history(executed_steps: list[dict[str, Any]]) -> set[str
         if statuses and all(status == "rolled_back" for status in statuses):
             blocked.add(tool)
     return blocked
+
+
+def _allowed_or_all_tools(state: WorkflowState, all_tools: list[str]) -> set[str]:
+    requested = state["request"].get("allowed_tools") or []
+    if not requested:
+        return set(all_tools)
+    return {tool for tool in requested if tool in set(all_tools)}
 
 
 def _should_use_stroke_paint(
@@ -276,3 +212,104 @@ def _stroke_paint_boxes(region_summary: dict[str, Any]) -> list[dict[str, int]]:
         pad = max(4, int(max(width, height) * 0.25))
         boxes.append({"x": max(0, x - pad), "y": max(0, y - pad), "width": width + pad * 2, "height": height + pad * 2})
     return boxes
+
+
+def _step_from_recommendation(
+    recommendation,
+    state: WorkflowState,
+    region_summary: dict[str, Any],
+    blocked_tools: set[str],
+) -> PlanStep | None:
+    tool = recommendation.tool
+    if tool in blocked_tools:
+        return None
+    if tool in {"paint_strokes", "spot_healing_brush", "healing_brush", "clone_source_paint"}:
+        return None
+    params = dict(recommendation.params_hint)
+    if tool == "stroke_paint":
+        boxes = _stroke_paint_boxes(region_summary)
+        if not boxes:
+            return None
+        params.update(
+            {
+                "mask_boxes": boxes,
+                "min_size": 3,
+                "max_size": 10,
+                "opacity": 0.5 if "natural" in state["prompt"].lower() else 0.62,
+            }
+        )
+        return PlanStep(tool=tool, params=params, reason="Use iterative local repair strokes on the most concentrated damaged regions")
+    if tool == "texture_softness_bias_from_reference" and not state["reference_image_path"]:
+        return None
+    if tool == "bounded_histogram_match_to_reference" and not state["reference_image_path"]:
+        return None
+    reason = recommendation.rationale or f"Selected by tool ranking for {tool}"
+    if tool == "shadow_highlight_balance":
+        reason = "Recover faded tonal separation without aggressive clipping"
+    elif tool == "clahe_contrast":
+        reason = "Gently restore local contrast"
+    elif tool == "auto_white_balance":
+        reason = "Reduce color cast conservatively"
+    elif tool == "dust_cleanup":
+        reason = "Remove isolated scan dust and speckles"
+    elif tool == "scratch_candidate_cleanup":
+        reason = "Reduce small scratch-like artifacts where safe"
+    elif tool == "small_defect_heal":
+        reason = "Use local healing for small detected defect regions after coarse cleanup"
+    elif tool == "non_local_means_denoise":
+        reason = "Reduce visible scan or sensor noise"
+    elif tool == "bilateral_denoise":
+        reason = "Use a gentler edge-preserving denoise after prior rollback"
+    elif tool == "bounded_histogram_match_to_reference":
+        reason = "Bias tonal feel toward the reference without copying content"
+    elif tool == "texture_softness_bias_from_reference":
+        reason = "Match the reference softness or crispness feel at a low level"
+    elif tool == "unsharp_mask":
+        reason = "Add light sharpening after cleanup"
+    return PlanStep(tool=tool, params=params, reason=reason)
+
+
+def _acceptance_for_tool(tool: str) -> list[str]:
+    mapping = {
+        "auto_white_balance": ["yellow cast reduced"],
+        "shadow_highlight_balance": ["contrast improved without clipping"],
+        "clahe_contrast": ["contrast improved without clipping"],
+        "dust_cleanup": ["dust visibly reduced"],
+        "scratch_candidate_cleanup": ["scratch defects reduced"],
+        "small_defect_heal": ["targeted defect regions repaired naturally"],
+        "stroke_paint": ["localized damaged regions repaired without broad overpaint"],
+        "non_local_means_denoise": ["noise reduced while retaining texture"],
+        "bilateral_denoise": ["noise reduced while retaining texture"],
+        "bounded_histogram_match_to_reference": ["reference style reflected only in tone and texture"],
+        "texture_softness_bias_from_reference": ["reference style reflected only in tone and texture"],
+        "unsharp_mask": ["detail remains natural"],
+    }
+    return mapping.get(tool, [])
+
+
+def _ordered_unique_steps(steps: list[PlanStep]) -> list[PlanStep]:
+    preferred_order = {
+        "deskew": 10,
+        "auto_white_balance": 20,
+        "shadow_highlight_balance": 30,
+        "clahe_contrast": 35,
+        "histogram_balance": 36,
+        "dust_cleanup": 40,
+        "scratch_candidate_cleanup": 45,
+        "small_defect_heal": 50,
+        "stroke_paint": 55,
+        "non_local_means_denoise": 60,
+        "bilateral_denoise": 61,
+        "bounded_histogram_match_to_reference": 70,
+        "texture_softness_bias_from_reference": 75,
+        "unsharp_mask": 80,
+    }
+    indexed = []
+    seen: set[str] = set()
+    for idx, step in enumerate(steps):
+        if step.tool in seen:
+            continue
+        seen.add(step.tool)
+        indexed.append((preferred_order.get(step.tool, 999), idx, step))
+    indexed.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in indexed]

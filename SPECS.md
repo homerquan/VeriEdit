@@ -40,7 +40,7 @@ The LLM is **not** used to generate replacement image content.
 - Accept **1 or 2 images + prompt**
 - Use **tool-driven editing only**
 - Support **closed-loop review and retry**
-- Support a **LangGraph multi-agent workflow**
+- Support an **AG2 multi-agent runtime workflow**
 - Default to **Gemini Flash** for orchestration / review
 - Make outputs auditable and reproducible
 
@@ -82,7 +82,7 @@ CLI / Python API
 Input Loader + Validation
       |
       v
-LangGraph Orchestrator
+AG2 Runtime Orchestrator
   ├─ Planner Agent
   ├─ Tool Executor Agent
   ├─ Reviewer Agent
@@ -116,8 +116,8 @@ Artifacts
 - `rich` for logs / terminal UX
 
 ### Orchestration
-- `langgraph`
-- `langchain-core` only where useful for messages / tool interfaces
+- `ag2`
+- direct Python agent/tool orchestration around a shared workflow state
 
 ### Image editing SDKs
 Use the following stack:
@@ -170,6 +170,8 @@ veriedit/
     config.py
     schemas.py
     workflow.py
+    runtime/
+      ag2_runtime.py
     policy.py
     io/
       loader.py
@@ -209,6 +211,7 @@ result = edit_image(
     source_image="old_photo.jpg",
     prompt="Clean dust, reduce yellow cast, and lightly improve sharpness.",
     reference_image="desired_mood.jpg",  # optional
+    allowed_tools=["stroke_paint"],      # optional debug restriction
 )
 ```
 
@@ -218,7 +221,7 @@ veriedit edit \
   --input old_photo.jpg \
   --prompt "Clean dust, reduce yellow cast, and lightly improve sharpness." \
   --reference desired_mood.jpg \
-  --output result.png
+  --output-folder /tmp/veriedit
 ```
 
 ### Output artifacts
@@ -227,6 +230,23 @@ veriedit edit \
 - optional diff / mask previews
 - JSON execution report
 - Markdown summary report
+- AG2 chat history and runtime trace artifacts
+
+### Debugging control
+The main `veriedit edit` entrypoint should allow an optional tool whitelist:
+
+```bash
+veriedit edit \
+  --input IMG \
+  --prompt TEXT \
+  --allow-tool stroke_paint \
+  --allow-tool dust_cleanup
+```
+
+Behavior:
+- if omitted, all workflow tools are allowed
+- if provided, planner and executor must stay within the allowed set
+- intended primarily for debugging, benchmarking, and single-tool evaluation
 
 ### Proposed result object
 ```json
@@ -316,7 +336,7 @@ The reference image must **not** be used to copy semantic content.
 
 ---
 
-## 10. Multi-Agent Workflow (LangGraph)
+## 10. Multi-Agent Workflow (AG2)
 
 ### Agent 1: Planner
 Inputs:
@@ -470,7 +490,8 @@ result = edit_image(
     source_image="input.jpg",
     prompt="Restore this old photo, reduce yellowing, and keep it natural.",
     reference_image="target_feel.jpg",
-    output_path="output/result.png",
+    output_path="result.png",
+    allowed_tools=["dust_cleanup", "stroke_paint"],  # optional
 )
 ```
 
@@ -489,18 +510,24 @@ class EditRequest(BaseModel):
     prompt: str
     reference_image: str | None = None
     output_path: str | None = None
+    allowed_tools: list[str] = []
     max_iterations: int = 3
     preserve_metadata: bool = False
     save_intermediates: bool = True
     llm_model: str = "gemini-3-flash"
 ```
 
+Notes:
+- `output_path` in the Python API controls the filename inside the run folder
+- CLI users should prefer `--output-folder` for `veriedit edit`
+- `allowed_tools` is optional and intended mainly for debugging or isolated tool evaluation
+
 ---
 
 ## 15. CLI Commands
 
 ```bash
-veriedit edit --input IMG --prompt TEXT [--reference IMG] [--output FILE]
+veriedit edit --input IMG --prompt TEXT [--reference IMG] [--output-folder DIR] [--allow-tool TOOL ...]
 veriedit inspect --input IMG
 veriedit batch --input-dir DIR --prompt TEXT
 veriedit report --run-id RUN_ID
@@ -512,7 +539,9 @@ veriedit edit \
   --input scan.jpg \
   --reference clean_warm_photo.jpg \
   --prompt "Clean dust, gently restore contrast, and keep the result realistic." \
-  --output restored.png \
+  --output-folder /tmp/veriedit \
+  --allow-tool dust_cleanup \
+  --allow-tool stroke_paint \
   --save-intermediates
 ```
 
@@ -631,7 +660,7 @@ MVP must include:
 - pip-installable package
 - CLI + Python API
 - one-image and two-image inputs
-- LangGraph multi-agent loop
+- AG2 multi-agent runtime loop
 - Gemini-driven planner/reviewer
 - OpenCV/Pillow/scikit-image execution layer
 - JSON + Markdown reports

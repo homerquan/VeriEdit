@@ -22,6 +22,7 @@ def build_report_payload(state: WorkflowState) -> dict:
         "style_profile": state["style_profile"],
         "plan": state["plan"],
         "executed_steps": state["executed_steps"],
+        "agent_handoffs": state.get("agent_handoffs", []),
         "observation_trace": state.get("observation_trace", []),
         "review": state["review"],
         "human_review": state.get("human_review"),
@@ -47,6 +48,7 @@ def build_markdown_report(state: WorkflowState) -> str:
         f"- Source image: `{state['source_image_path']}`",
         f"- Reference image: `{state['reference_image_path']}`" if state["reference_image_path"] else "- Reference image: none",
         f"- Prompt: {state['prompt']}",
+        f"- Allowed tools: {', '.join(state['request'].get('allowed_tools', [])) or 'all'}",
         "",
         "## Images",
         "",
@@ -75,6 +77,7 @@ def build_markdown_report(state: WorkflowState) -> str:
             "## Plan",
             f"- Objective: {(state['plan'] or {}).get('objective', 'n/a')}",
             f"- Acceptance: {', '.join((state['plan'] or {}).get('acceptance', [])) or 'n/a'}",
+            f"- Recommended tools: {', '.join(item['tool'] for item in (state['plan'] or {}).get('recommended_tools', [])[:6]) or 'n/a'}",
             f"- Diagnostic board: `{(state.get('diagnostic_artifacts') or {}).get('regions_board', 'n/a')}`",
             "",
             "## What Changed",
@@ -103,6 +106,17 @@ def build_markdown_report(state: WorkflowState) -> str:
             )
     else:
         lines.extend(["- No executed steps recorded.", ""])
+    lines.extend(
+        [
+            "",
+            "## Agent Handoffs",
+        ]
+    )
+    if state.get("agent_handoffs"):
+        for handoff in state["agent_handoffs"]:
+            lines.append(f"- `{handoff['from_agent']}` -> `{handoff['to_agent']}`: {handoff['summary']}")
+    else:
+        lines.append("- No structured handoffs recorded.")
     lines.extend(
         [
             "",
@@ -155,7 +169,7 @@ def build_observation_markdown(state: WorkflowState) -> str:
         "## Node Flow",
         "```mermaid",
         "flowchart TD",
-        '    A["policy_check"] --> B["diagnose_inputs"] --> C["plan_edits"] --> D["execute_plan"] --> E["review_result"] --> F["decide_retry"]',
+        '    A["policy_check"] --> B["diagnose_inputs"] --> C["plan_edits"] --> D["execute_plan"] --> E["review_result"] --> F["human_approval_gate"] --> G["decide_retry"]',
         "```",
         "",
         "## Trace Events",
@@ -164,6 +178,10 @@ def build_observation_markdown(state: WorkflowState) -> str:
         if event["kind"] == "node":
             lines.append(
                 f"- node `{event['node']}` {event['phase']} iteration {event['iteration']} summary={json.dumps(event.get('summary', {}), sort_keys=True)}"
+            )
+        elif event["kind"] == "handoff":
+            lines.append(
+                f"- handoff `{event['from_agent']}` -> `{event['to_agent']}` summary={event['summary']}"
             )
         else:
             lines.append(
